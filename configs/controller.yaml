@@ -1,0 +1,20 @@
+server:
+  http_addr: ":8080"
+  grpc_addr: ":9090"
+
+storage:
+  driver: sqlite
+  sqlite:
+    path: "./data/probex.db"
+
+retention:
+  raw_results: 720h    # 30 days
+  aggregated: 8760h    # 1 year
+
+agent:
+  name: "local"
+  labels:
+    region: "local"
+
+runner:
+  max_concurrent: 50

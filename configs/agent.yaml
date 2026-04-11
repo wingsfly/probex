@@ -1,0 +1,9 @@
+controller_url: "http://localhost:8080"
+
+agent:
+  name: "remote-agent-1"
+  labels:
+    region: "us-east"
+
+heartbeat_interval: 30s
+poll_interval: 10s

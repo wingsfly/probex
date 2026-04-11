@@ -1,0 +1,42 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Data
+data/
+*.db
+*.db-journal
+*.db-wal
+
+# Diagnosis output
+diagnosis-*/
+diagnosis.zip
+
+# Node modules
+web/node_modules/
+web/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+*.o
+*.a
+*.test
+
+# Env
+.env
+.env.local
+cli
+controller
