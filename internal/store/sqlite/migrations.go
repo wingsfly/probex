@@ -108,4 +108,50 @@ CREATE TABLE IF NOT EXISTS probes (
     registered_at    INTEGER NOT NULL,
     last_push_at     INTEGER
 );
+
+-- Aggregation tables (time-bucketed summaries)
+-- Each has identical schema: per task+agent, one row per time bucket
+CREATE TABLE IF NOT EXISTS agg_1m (
+    task_id       TEXT NOT NULL,
+    agent_id      TEXT NOT NULL,
+    bucket_start  INTEGER NOT NULL,
+    bucket_end    INTEGER NOT NULL,
+    count         INTEGER NOT NULL,
+    success_count INTEGER NOT NULL,
+    metrics       TEXT DEFAULT '{}',
+    PRIMARY KEY (task_id, agent_id, bucket_start)
+);
+
+CREATE TABLE IF NOT EXISTS agg_10m (
+    task_id       TEXT NOT NULL,
+    agent_id      TEXT NOT NULL,
+    bucket_start  INTEGER NOT NULL,
+    bucket_end    INTEGER NOT NULL,
+    count         INTEGER NOT NULL,
+    success_count INTEGER NOT NULL,
+    metrics       TEXT DEFAULT '{}',
+    PRIMARY KEY (task_id, agent_id, bucket_start)
+);
+
+CREATE TABLE IF NOT EXISTS agg_1h (
+    task_id       TEXT NOT NULL,
+    agent_id      TEXT NOT NULL,
+    bucket_start  INTEGER NOT NULL,
+    bucket_end    INTEGER NOT NULL,
+    count         INTEGER NOT NULL,
+    success_count INTEGER NOT NULL,
+    metrics       TEXT DEFAULT '{}',
+    PRIMARY KEY (task_id, agent_id, bucket_start)
+);
+
+CREATE TABLE IF NOT EXISTS agg_8h (
+    task_id       TEXT NOT NULL,
+    agent_id      TEXT NOT NULL,
+    bucket_start  INTEGER NOT NULL,
+    bucket_end    INTEGER NOT NULL,
+    count         INTEGER NOT NULL,
+    success_count INTEGER NOT NULL,
+    metrics       TEXT DEFAULT '{}',
+    PRIMARY KEY (task_id, agent_id, bucket_start)
+);
 `

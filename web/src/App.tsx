@@ -1,21 +1,32 @@
 import { Routes, Route, NavLink } from 'react-router-dom'
+import Overview from './pages/Overview'
 import Dashboard from './pages/Dashboard'
+import Nodes from './pages/Nodes'
 import Tasks from './pages/Tasks'
 import Probes from './pages/Probes'
 import Results from './pages/Results'
+import Heatmap from './pages/Heatmap'
 import Reports from './pages/Reports'
 import Alerts from './pages/Alerts'
 import Agents from './pages/Agents'
 
 const navItems = [
-  { path: '/', label: 'Dashboard' },
-  { path: '/tasks', label: 'Tasks' },
-  { path: '/probes', label: 'Probes' },
-  { path: '/results', label: 'Results' },
-  { path: '/reports', label: 'Reports' },
-  { path: '/alerts', label: 'Alerts' },
-  { path: '/agents', label: 'Agents' },
+  { path: '/', label: 'Overview', section: 'monitor' },
+  { path: '/dashboard', label: 'Dashboard', section: 'monitor' },
+  { path: '/nodes', label: 'Nodes', section: 'monitor' },
+  { path: '/heatmap', label: 'Heatmap', section: 'monitor' },
+  { path: '/tasks', label: 'Tasks', section: 'config' },
+  { path: '/probes', label: 'Probes', section: 'config' },
+  { path: '/results', label: 'Results', section: 'data' },
+  { path: '/reports', label: 'Reports', section: 'data' },
+  { path: '/alerts', label: 'Alerts', section: 'data' },
 ]
+
+const sections: Record<string, string> = {
+  monitor: 'MONITORING',
+  config: 'CONFIGURATION',
+  data: 'DATA & ALERTS',
+}
 
 export default function App() {
   return (
@@ -31,27 +42,37 @@ export default function App() {
           <p style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: 2 }}>Network Quality Monitor</p>
         </div>
         <nav>
-          {navItems.map(({ path, label }) => (
-            <NavLink
-              key={path}
-              to={path}
-              end={path === '/'}
-              style={({ isActive }) => ({
-                display: 'block', padding: '0.6rem 1.5rem', fontSize: '0.875rem',
-                color: isActive ? '#fff' : '#94a3b8',
-                background: isActive ? '#334155' : 'transparent',
-                textDecoration: 'none', borderLeft: isActive ? '3px solid #3b82f6' : '3px solid transparent',
-              })}
-            >
-              {label}
-            </NavLink>
+          {Object.entries(sections).map(([key, label]) => (
+            <div key={key}>
+              <div style={{ padding: '0.5rem 1.5rem 0.25rem', fontSize: '0.6rem', fontWeight: 600, color: '#475569', letterSpacing: '0.05em' }}>
+                {label}
+              </div>
+              {navItems.filter(n => n.section === key).map(({ path, label: navLabel }) => (
+                <NavLink
+                  key={path}
+                  to={path}
+                  end={path === '/'}
+                  style={({ isActive }) => ({
+                    display: 'block', padding: '0.5rem 1.5rem', fontSize: '0.85rem',
+                    color: isActive ? '#fff' : '#94a3b8',
+                    background: isActive ? '#334155' : 'transparent',
+                    textDecoration: 'none', borderLeft: isActive ? '3px solid #3b82f6' : '3px solid transparent',
+                  })}
+                >
+                  {navLabel}
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
       </aside>
 
-      <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: 1200 }}>
+      <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: 1400 }}>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Overview />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/nodes" element={<Nodes />} />
+          <Route path="/heatmap" element={<Heatmap />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/probes" element={<Probes />} />
           <Route path="/results" element={<Results />} />
