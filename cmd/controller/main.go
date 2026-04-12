@@ -127,8 +127,9 @@ func main() {
 	go retentionWorker.Run(bgCtx)
 	logger.Info("retention worker started", "retention", cfg.Retention.RawResults)
 
-	// Start API server
-	srv := api.NewServer(store, runner, registry, reportGen, alertEval)
+	// Start API server (standalone mode: use RunnerNotifier for local execution)
+	notifier := api.NewRunnerNotifier(runner)
+	srv := api.NewServer(store, notifier, registry, reportGen, alertEval)
 	httpServer := &http.Server{
 		Addr:    cfg.Server.HTTPAddr,
 		Handler: srv.Handler(),

@@ -8,12 +8,28 @@ import (
 )
 
 type Config struct {
+	Mode      string          `yaml:"mode"` // "standalone" (default), "hub", "agent"
 	Server    ServerConfig    `yaml:"server"`
 	Storage   StorageConfig   `yaml:"storage"`
 	Retention RetentionConfig `yaml:"retention"`
 	Agent     AgentConfig     `yaml:"agent"`
 	Runner    RunnerConfig    `yaml:"runner"`
 	Probe     ProbeConfig     `yaml:"probe"`
+	Hub       HubConfig       `yaml:"hub"`
+	Connect   ConnectConfig   `yaml:"connect"` // agent mode: connect to hub
+}
+
+type HubConfig struct {
+	Token string `yaml:"token"` // shared secret for agent authentication
+}
+
+type ConnectConfig struct {
+	HubURL            string            `yaml:"hub_url"`    // ws(s)://hub:8080/api/v1/ws/agent
+	Token             string            `yaml:"token"`
+	Name              string            `yaml:"name"`
+	Labels            map[string]string `yaml:"labels"`
+	ReconnectInterval time.Duration     `yaml:"reconnect_interval"`
+	LocalHTTPAddr     string            `yaml:"local_http_addr"` // optional local UI port
 }
 
 type ProbeConfig struct {
@@ -69,6 +85,10 @@ func DefaultConfig() *Config {
 		},
 		Probe: ProbeConfig{
 			ScriptDir: "./scripts/probes",
+		},
+		Hub: HubConfig{},
+		Connect: ConnectConfig{
+			ReconnectInterval: 5 * time.Second,
 		},
 	}
 }

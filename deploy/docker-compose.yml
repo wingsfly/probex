@@ -1,0 +1,13 @@
+# ProbeX Standalone — single-node monitoring
+services:
+  probex:
+    build: ..
+    ports:
+      - "8080:8080"
+    volumes:
+      - probex-data:/data
+    command: ["standalone", "--config", "/data/config.yaml"]
+    restart: unless-stopped
+
+volumes:
+  probex-data:

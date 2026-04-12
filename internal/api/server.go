@@ -16,19 +16,32 @@ import (
 type Server struct {
 	router    *chi.Mux
 	store     store.Store
-	runner    *probe.Runner
+	notifier  TaskNotifier
 	registry  *probe.Registry
 	generator *report.Generator
 	alertEval AlertEvaluator
+	mode      string // "standalone", "hub", "agent"
 }
 
-func NewServer(s store.Store, runner *probe.Runner, registry *probe.Registry, gen *report.Generator, alertEval AlertEvaluator) *Server {
+// ServerOption allows optional configuration of the server.
+type ServerOption func(*Server)
+
+// WithMode sets the server mode for conditional behavior.
+func WithMode(mode string) ServerOption {
+	return func(s *Server) { s.mode = mode }
+}
+
+func NewServer(s store.Store, notifier TaskNotifier, registry *probe.Registry, gen *report.Generator, alertEval AlertEvaluator, opts ...ServerOption) *Server {
 	srv := &Server{
 		store:     s,
-		runner:    runner,
+		notifier:  notifier,
 		registry:  registry,
 		generator: gen,
 		alertEval: alertEval,
+		mode:      "standalone",
+	}
+	for _, opt := range opts {
+		opt(srv)
 	}
 	srv.setupRoutes()
 	return srv
@@ -52,7 +65,7 @@ func (s *Server) setupRoutes() {
 		MaxAge:           300,
 	}))
 
-	taskH := NewTaskHandler(s.store, s.runner)
+	taskH := NewTaskHandler(s.store, s.notifier)
 	resultH := NewResultHandler(s.store)
 	agentH := NewAgentHandler(s.store, s.alertEval)
 	pluginH := NewPluginHandler(s.registry)
@@ -61,6 +74,11 @@ func (s *Server) setupRoutes() {
 	probeH := NewProbeHandler(s.registry, s.store, s.alertEval)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// Mode info
+		r.Get("/mode", func(w http.ResponseWriter, r *http.Request) {
+			writeData(w, map[string]string{"mode": s.mode})
+		})
+
 		// Tasks
 		r.Post("/tasks", taskH.Create)
 		r.Get("/tasks", taskH.List)
@@ -93,7 +111,7 @@ func (s *Server) setupRoutes() {
 		// Plugins (legacy)
 		r.Get("/plugins", pluginH.List)
 
-		// Probes (new unified registry)
+		// Probes (unified registry)
 		r.Get("/probes", probeH.List)
 		r.Get("/probes/{name}", probeH.Get)
 		r.Post("/probes/register", probeH.Register)
@@ -118,7 +136,7 @@ func (s *Server) setupRoutes() {
 
 	// Health check
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		writeData(w, map[string]string{"status": "ok"})
+		writeData(w, map[string]string{"status": "ok", "mode": s.mode})
 	})
 
 	s.router = r

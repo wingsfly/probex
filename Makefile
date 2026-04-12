@@ -1,9 +1,14 @@
-.PHONY: all build controller agent cli clean test run dev
+.PHONY: all build probex controller agent cli clean test run dev
 
 all: build
 
-build: controller agent cli
+build: probex
 
+# Unified binary (recommended)
+probex:
+	go build -o bin/probex ./cmd/probex
+
+# Legacy binaries (kept for backward compatibility)
 controller:
 	go build -o bin/probex-controller ./cmd/controller
 
@@ -19,8 +24,11 @@ clean:
 test:
 	go test ./...
 
-run: controller
-	./bin/probex-controller
+run: probex
+	./bin/probex standalone
 
-dev: build
-	./bin/probex-controller
+hub: probex
+	./bin/probex hub
+
+dev: probex
+	./bin/probex standalone

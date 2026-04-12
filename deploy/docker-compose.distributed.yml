@@ -1,0 +1,41 @@
+# ProbeX Distributed — Hub + 2 Agents for E2E testing
+services:
+  hub:
+    build: ..
+    ports:
+      - "8080:8080"
+    volumes:
+      - hub-data:/data
+    environment:
+      - PROBEX_HUB_TOKEN=test-token-123
+    command: ["hub", "--token", "test-token-123"]
+    restart: unless-stopped
+
+  agent-east:
+    build: ..
+    network_mode: host
+    depends_on:
+      - hub
+    command: >
+      agent
+      --hub ws://localhost:8080/api/v1/ws/agent
+      --token test-token-123
+      --name agent-east
+      --labels {"region":"us-east","isp":"aws"}
+    restart: unless-stopped
+
+  agent-west:
+    build: ..
+    network_mode: host
+    depends_on:
+      - hub
+    command: >
+      agent
+      --hub ws://localhost:8080/api/v1/ws/agent
+      --token test-token-123
+      --name agent-west
+      --labels {"region":"us-west","isp":"gcp"}
+    restart: unless-stopped
+
+volumes:
+  hub-data:

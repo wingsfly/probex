@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -10,17 +9,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/hjma/probex/internal/model"
-	"github.com/hjma/probex/internal/probe"
 	"github.com/hjma/probex/internal/store"
 )
 
 type TaskHandler struct {
-	store  store.Store
-	runner *probe.Runner
+	store    store.Store
+	notifier TaskNotifier
 }
 
-func NewTaskHandler(s store.Store, r *probe.Runner) *TaskHandler {
-	return &TaskHandler{store: s, runner: r}
+func NewTaskHandler(s store.Store, n TaskNotifier) *TaskHandler {
+	return &TaskHandler{store: s, notifier: n}
 }
 
 func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -82,8 +80,8 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if enabled && h.runner != nil {
-		h.runner.AddTask(task)
+	if h.notifier != nil {
+		h.notifier.OnTaskCreated(task)
 	}
 
 	writeJSON(w, http.StatusCreated, Response{Data: task})
@@ -180,12 +178,8 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.runner != nil {
-		if task.Enabled {
-			h.runner.UpdateTask(task)
-		} else {
-			h.runner.RemoveTask(task.ID)
-		}
+	if h.notifier != nil {
+		h.notifier.OnTaskUpdated(task)
 	}
 
 	writeData(w, task)
@@ -197,8 +191,8 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if h.runner != nil {
-		h.runner.RemoveTask(id)
+	if h.notifier != nil {
+		h.notifier.OnTaskDeleted(id)
 	}
 	writeJSON(w, http.StatusOK, Response{Data: "deleted"})
 }
@@ -213,8 +207,8 @@ func (h *TaskHandler) Pause(w http.ResponseWriter, r *http.Request) {
 	task.Enabled = false
 	task.UpdatedAt = time.Now()
 	h.store.UpdateTask(r.Context(), task)
-	if h.runner != nil {
-		h.runner.RemoveTask(id)
+	if h.notifier != nil {
+		h.notifier.OnTaskPaused(id)
 	}
 	writeData(w, task)
 }
@@ -229,8 +223,8 @@ func (h *TaskHandler) Resume(w http.ResponseWriter, r *http.Request) {
 	task.Enabled = true
 	task.UpdatedAt = time.Now()
 	h.store.UpdateTask(r.Context(), task)
-	if h.runner != nil {
-		h.runner.AddTask(task)
+	if h.notifier != nil {
+		h.notifier.OnTaskResumed(task)
 	}
 	writeData(w, task)
 }
@@ -242,8 +236,8 @@ func (h *TaskHandler) RunOnce(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
-	if h.runner != nil {
-		go h.runner.RunOnce(context.Background(), task)
+	if h.notifier != nil {
+		h.notifier.RunOnce(task)
 	}
 	writeData(w, "triggered")
 }
