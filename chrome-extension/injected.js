@@ -201,37 +201,85 @@
         WebSocket.prototype.send = hookedWsSend;
       }
     } catch (e) {}
-  }, 200);
-  setTimeout(() => clearInterval(hookCheckInterval), 30000);
+  }, 1000); // Check every second, indefinitely (very lightweight)
 
-  /** Play test audio into the hooked stream. Returns promise resolving when playback ends. */
+  /** Send test audio directly through the voiceDictation WebSocket.
+   *  Bypasses getUserMedia/MediaRecorder entirely — sends PCM chunks in the
+   *  same format the Guidex SDK uses: {"status":1,"message":"<base64 PCM>"} */
   function playTestAudio() {
-    return new Promise(async (resolve) => {
+    return new Promise((resolve) => {
       if (!audioBuffer) { console.warn('[ProbeX] No audio buffer loaded'); resolve(); return; }
-
-      ensureAudioCtx();
-      if (audioCtx.state === 'suspended') await audioCtx.resume();
-
-      // Mute real mic, enable injection path
-      micGainNode.gain.value = 0;
-      injectGainNode.gain.value = 1;
-
-      if (currentSource) { try { currentSource.stop(); } catch (e) {} }
-
-      currentSource = audioCtx.createBufferSource();
-      currentSource.buffer = audioBuffer;
-      currentSource.connect(injectGainNode);
-      currentSource.onended = () => {
-        // Restore: mic on, injection off
-        micGainNode.gain.value = 1;
-        injectGainNode.gain.value = 0;
-        currentSource = null;
-        console.log('[ProbeX] Test audio ended, mic restored');
+      if (!voiceDictationWs || voiceDictationWs.readyState !== WebSocket.OPEN) {
+        console.warn('[ProbeX] voiceDictation WebSocket not open');
         resolve();
-      };
-      currentSource.start();
-      console.log('[ProbeX] Playing test audio (' + audioBuffer.duration.toFixed(1) + 's) via getUserMedia proxy');
+        return;
+      }
+
+      // Convert AudioBuffer to 16-bit PCM at 16kHz (iFlytek ASR standard)
+      const targetRate = 16000;
+      const srcData = audioBuffer.getChannelData(0); // mono channel
+      const ratio = audioBuffer.sampleRate / targetRate;
+      const targetLen = Math.floor(srcData.length / ratio);
+      const pcm16 = new Int16Array(targetLen);
+      for (let i = 0; i < targetLen; i++) {
+        const srcIdx = Math.floor(i * ratio);
+        const sample = Math.max(-1, Math.min(1, srcData[srcIdx]));
+        pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      }
+
+      // Split into chunks (~40ms each, matching typical ASR frame size)
+      const chunkSamples = Math.floor(targetRate * 0.04); // 640 samples per 40ms
+      const chunkBytes = chunkSamples * 2; // 16-bit = 2 bytes per sample
+      const totalChunks = Math.ceil(pcm16.length / chunkSamples);
+      const sendInterval = 40; // send one chunk every 40ms (real-time)
+
+      console.log('[ProbeX] Sending test audio via WS: ' + audioBuffer.duration.toFixed(1) + 's, ' + totalChunks + ' chunks @ 40ms');
+
+      let chunkIdx = 0;
+      const ws = voiceDictationWs;
+      const origSendRef = OrigWebSocket.prototype.send.bind(ws);
+
+      const timer = setInterval(() => {
+        if (chunkIdx >= totalChunks || ws.readyState !== WebSocket.OPEN) {
+          clearInterval(timer);
+          console.log('[ProbeX] Test audio send complete (' + chunkIdx + ' chunks sent)');
+          resolve();
+          return;
+        }
+
+        const start = chunkIdx * chunkSamples;
+        const end = Math.min(start + chunkSamples, pcm16.length);
+        const chunk = pcm16.slice(start, end);
+
+        // Convert to base64
+        const bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        const b64 = btoa(binary);
+
+        // Send as the SDK would
+        const msg = JSON.stringify({ status: 1, message: b64 });
+        try {
+          origSendRef(msg);
+        } catch (e) {
+          console.error('[ProbeX] WS send error:', e.message);
+          clearInterval(timer);
+          resolve();
+          return;
+        }
+        chunkIdx++;
+      }, sendInterval);
     });
+  }
+
+  /** Send voiceDictation end message (status=2) to close the ASR session */
+  function sendVoiceDictationEnd() {
+    if (!voiceDictationWs || voiceDictationWs.readyState !== WebSocket.OPEN) return;
+    try {
+      const msg = JSON.stringify({ status: 2, message: '', language: 'en' });
+      OrigWebSocket.prototype.send.call(voiceDictationWs, msg);
+      console.log('[ProbeX] Sent voiceDictation end (status=2)');
+    } catch (e) {}
   }
 
   // --- Config (injected via postMessage from content-script) ---
@@ -810,17 +858,49 @@
     autoTestCycleCount++;
     console.log('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': clicking button');
 
+    // Reset voiceDictation tracking for this cycle
+    vdSendCount = 0;
+    const prevVdWs = voiceDictationWs;
+
     // Click to start conversation
     btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 
-    // Short delay for the app to start capturing audio
-    await new Promise(r => setTimeout(r, 500));
+    // Wait for voiceDictation WS to be created and send its init message (status=0)
+    // Then wait a bit more for MediaRecorder to start capturing
+    const vdReady = await new Promise((resolve) => {
+      let checks = 0;
+      const check = setInterval(() => {
+        checks++;
+        // voiceDictation WS created and at least init sent
+        if (voiceDictationWs && voiceDictationWs !== prevVdWs && vdSendCount >= 1) {
+          clearInterval(check);
+          resolve(true);
+        }
+        if (checks > 50) { // 5 second timeout
+          clearInterval(check);
+          resolve(false);
+        }
+      }, 100);
+    });
 
-    // Play audio into the hooked MediaStream
+    if (!vdReady) {
+      console.warn('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': voiceDictation WS not ready, skipping');
+      return;
+    }
+
+    // Extra delay after init to ensure MediaRecorder is actively capturing
+    await new Promise(r => setTimeout(r, 800));
+
+    console.log('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': VD ready, playing audio');
+
+    // Send audio chunks via WS
     await playTestAudio();
 
-    // Extra silence delay for VAD to detect end-of-speech
-    console.log('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': audio done, waiting for VAD');
+    // Send end-of-session message (status=2) after a short silence gap
+    await new Promise(r => setTimeout(r, 300));
+    sendVoiceDictationEnd();
+
+    console.log('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': complete');
   }
 
   async function startAutoTest(selector, interval) {
