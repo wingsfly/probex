@@ -854,6 +854,65 @@
     document.addEventListener('keydown', onKeydown, true);
   };
 
+  // ====== Guidex Interaction Probe: Timing Metrics ======
+
+  let interactionProbeRegistered = false;
+  const INTERACTION_PROBE_NAME = 'guidex-interaction';
+
+  async function registerInteractionProbe() {
+    try {
+      const result = await probexFetch(`${hubUrl}/api/v1/probes/register`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: INTERACTION_PROBE_NAME,
+          description: 'Guidex auto-test: end-to-end voice interaction timing metrics',
+          output_schema: {
+            standard_fields: ['latency_ms'],
+            extra_fields: [
+              { name: 'success', type: 'boolean', description: 'Whether ASR recognized speech', chartable: false },
+              { name: 'asr_text', type: 'string', description: 'Recognized text from ASR' },
+              { name: 'audio_duration_ms', type: 'number', unit: 'ms', description: 'Duration of injected test audio', chartable: true },
+              { name: 'click_to_vd_ready_ms', type: 'number', unit: 'ms', description: 'Button click → voiceDictation WS init', chartable: true },
+              { name: 'audio_start_to_first_asr_ms', type: 'number', unit: 'ms', description: 'Audio send start → first word recognized', chartable: true },
+              { name: 'audio_end_to_final_asr_ms', type: 'number', unit: 'ms', description: 'Audio send end → final ASR result', chartable: true },
+              { name: 'final_asr_to_tts_ms', type: 'number', unit: 'ms', description: 'Final ASR → TTS/avatar response start', chartable: true },
+              { name: 'total_interaction_ms', type: 'number', unit: 'ms', description: 'Button click → TTS response start', chartable: true },
+              { name: 'cycle', type: 'number', description: 'Auto-test cycle number' },
+              { name: 'page_url', type: 'string', description: 'Source page URL' },
+            ],
+          },
+        }),
+      });
+      interactionProbeRegistered = result.ok || result.status === 409;
+    } catch (e) { interactionProbeRegistered = false; }
+  }
+
+  async function pushInteractionResult(metrics) {
+    if (!interactionProbeRegistered) {
+      await registerInteractionProbe();
+      if (!interactionProbeRegistered) return;
+    }
+    try {
+      await probexFetch(`${hubUrl}/api/v1/probes/${encodeURIComponent(INTERACTION_PROBE_NAME)}/push`, {
+        method: 'POST',
+        body: JSON.stringify({
+          task_id: 'ext_' + INTERACTION_PROBE_NAME,
+          agent_id: agentId,
+          results: [{
+            timestamp: new Date().toISOString(),
+            success: metrics.success,
+            latency_ms: metrics.totalInteractionMs || null,
+            extra: metrics,
+          }],
+        }),
+      });
+      console.log('[ProbeX] Interaction probe pushed: ' + (metrics.success ? 'OK' : 'FAIL') +
+        ' total=' + (metrics.total_interaction_ms || '-') + 'ms' +
+        ' firstASR=' + (metrics.audio_start_to_first_asr_ms || '-') + 'ms' +
+        ' tts=' + (metrics.final_asr_to_tts_ms || '-') + 'ms');
+    } catch (e) {}
+  }
+
   // ====== Auto-Test: Loop ======
 
   let autoTestTimer = null;
@@ -866,61 +925,165 @@
     if (!autoTestRunning) return;
 
     const btn = document.querySelector(autoTestSelector);
-    if (!btn) {
-      // Silently skip — button doesn't exist on this page (e.g. config page)
-      return;
-    }
+    if (!btn) return; // silently skip on wrong page
     if (!audioBuffer) {
       console.warn('[ProbeX] Auto-test: no audio loaded');
       return;
     }
 
     autoTestCycleCount++;
-    console.log('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': clicking button');
+    const cycleNum = autoTestCycleCount;
+
+    // ---- Timing: t_click ----
+    const tClick = performance.now();
 
     // Reset voiceDictation tracking for this cycle
     vdSendCount = 0;
     const prevVdWs = voiceDictationWs;
 
+    // ASR tracking state for this cycle
+    let firstAsrText = null;
+    let firstAsrTime = 0;
+    let finalAsrText = '';
+    let finalAsrTime = 0;
+    let ttsStartTime = 0;
+    let asrListener = null;
+    let interactListener = null;
+
+    // Listen for ASR responses on the voiceDictation WS
+    function setupAsrListener(ws) {
+      asrListener = (ev) => {
+        if (typeof ev.data !== 'string') return;
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.code !== 0 || !msg.data?.result) return;
+          const result = msg.data.result;
+          // Extract recognized words
+          const words = (result.ws || []).flatMap(w => (w.cw || []).map(c => c.w)).join('').trim();
+
+          if (words && !firstAsrTime) {
+            firstAsrTime = performance.now();
+            firstAsrText = words;
+          }
+          if (result.ls === true && msg.data.status === 2) {
+            finalAsrTime = performance.now();
+            finalAsrText = words || firstAsrText || '';
+          }
+        } catch (e) {}
+      };
+      ws.addEventListener('message', asrListener);
+    }
+
+    // Listen for TTS/avatar response on the interact WS
+    function setupTtsListener() {
+      const interactWs = window.__probexWsList.find(ws =>
+        ws.url?.includes('avatar-api-gp.xf-yun.com/v1/interact') && ws.readyState === WebSocket.OPEN
+      );
+      if (!interactWs) return;
+      interactListener = (ev) => {
+        if (ttsStartTime) return; // only capture first TTS event
+        if (typeof ev.data === 'string') {
+          try {
+            const msg = JSON.parse(ev.data);
+            // Detect TTS/answer response (varies by SDK, look for text/audio indicators)
+            if (msg.data?.text || msg.data?.audio || msg.type === 'answer' || msg.data?.sub === 'tts') {
+              ttsStartTime = performance.now();
+            }
+          } catch (e) {}
+        }
+      };
+      interactWs.addEventListener('message', interactListener);
+    }
+
+    console.log('[ProbeX] Auto-test cycle #' + cycleNum + ': clicking button');
+
     // Click to start conversation
     btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 
-    // Wait for voiceDictation WS to be created and send its init message (status=0)
-    // Then wait a bit more for MediaRecorder to start capturing
+    // Wait for voiceDictation WS ready
     const vdReady = await new Promise((resolve) => {
       let checks = 0;
       const check = setInterval(() => {
         checks++;
-        // voiceDictation WS created and at least init sent
         if (voiceDictationWs && voiceDictationWs !== prevVdWs && vdSendCount >= 1) {
           clearInterval(check);
           resolve(true);
         }
-        if (checks > 50) { // 5 second timeout
+        if (checks > 50) { clearInterval(check); resolve(false); }
+      }, 100);
+    });
+
+    // ---- Timing: t_vd_ready ----
+    const tVdReady = performance.now();
+
+    if (!vdReady) {
+      console.warn('[ProbeX] Auto-test cycle #' + cycleNum + ': VD not ready, skipping');
+      await pushInteractionResult({
+        success: false, cycle: cycleNum, page_url: location.href,
+        audio_duration_ms: Math.round(audioBuffer.duration * 1000),
+        click_to_vd_ready_ms: null,
+      });
+      return;
+    }
+
+    // Setup listeners before sending audio
+    setupAsrListener(voiceDictationWs);
+    setupTtsListener();
+
+    await new Promise(r => setTimeout(r, 800));
+
+    // ---- Timing: t_audio_start ----
+    const tAudioStart = performance.now();
+    console.log('[ProbeX] Auto-test cycle #' + cycleNum + ': VD ready, playing audio');
+
+    await playTestAudio();
+
+    // ---- Timing: t_audio_end ----
+    const tAudioEnd = performance.now();
+
+    await new Promise(r => setTimeout(r, 300));
+    sendVoiceDictationEnd();
+
+    // Wait for ASR final result + TTS start (up to 15 seconds)
+    await new Promise((resolve) => {
+      let checks = 0;
+      const check = setInterval(() => {
+        checks++;
+        if ((finalAsrTime && ttsStartTime) || checks > 150) {
           clearInterval(check);
-          resolve(false);
+          resolve();
         }
       }, 100);
     });
 
-    if (!vdReady) {
-      console.warn('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': voiceDictation WS not ready, skipping');
-      return;
+    // ---- Collect metrics ----
+    const asrSuccess = !!firstAsrText;
+    const metrics = {
+      success: asrSuccess,
+      asr_text: finalAsrText || firstAsrText || '',
+      cycle: cycleNum,
+      page_url: location.href,
+      audio_duration_ms: Math.round(audioBuffer.duration * 1000),
+      click_to_vd_ready_ms: Math.round(tVdReady - tClick),
+      audio_start_to_first_asr_ms: firstAsrTime ? Math.round(firstAsrTime - tAudioStart) : null,
+      audio_end_to_final_asr_ms: finalAsrTime ? Math.round(finalAsrTime - tAudioEnd) : null,
+      final_asr_to_tts_ms: (finalAsrTime && ttsStartTime) ? Math.round(ttsStartTime - finalAsrTime) : null,
+      total_interaction_ms: ttsStartTime ? Math.round(ttsStartTime - tClick) : (finalAsrTime ? Math.round(finalAsrTime - tClick) : null),
+    };
+
+    // Cleanup listeners
+    if (asrListener && voiceDictationWs) voiceDictationWs.removeEventListener('message', asrListener);
+    if (interactListener) {
+      const iws = window.__probexWsList.find(ws => ws.url?.includes('avatar-api-gp.xf-yun.com/v1/interact'));
+      if (iws) iws.removeEventListener('message', interactListener);
     }
 
-    // Extra delay after init to ensure MediaRecorder is actively capturing
-    await new Promise(r => setTimeout(r, 800));
+    // Push to ProbeX
+    await pushInteractionResult(metrics);
 
-    console.log('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': VD ready, playing audio');
-
-    // Send audio chunks via WS
-    await playTestAudio();
-
-    // Send end-of-session message (status=2) after a short silence gap
-    await new Promise(r => setTimeout(r, 300));
-    sendVoiceDictationEnd();
-
-    console.log('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': complete');
+    console.log('[ProbeX] Auto-test cycle #' + cycleNum + ': complete (' +
+      (asrSuccess ? 'ASR="' + finalAsrText + '"' : 'no ASR') +
+      ' total=' + (metrics.total_interaction_ms || '?') + 'ms)');
   }
 
   async function startAutoTest(selector, interval) {
