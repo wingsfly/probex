@@ -63,7 +63,7 @@
       const micSource = audioCtx.createMediaStreamSource(realStream);
       micSource.connect(micGainNode);
     } catch (e) {
-      console.warn('[ProbeX] getUserMedia failed (' + e.name + '), returning silent proxy stream');
+      console.debug('[ProbeX] getUserMedia: no mic (' + e.name + '), using silent proxy stream');
       // No mic — return proxy with silent audio (will be filled by test audio injection)
     }
 
