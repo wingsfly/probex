@@ -110,17 +110,121 @@ function onSave() {
   chrome.storage.local.set({ probexConfig: newConfig });
 }
 
+// --- Auto-Test ---
+
+async function onCapture() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => { if (window.__probexStartCapture) window.__probexStartCapture(); },
+      world: 'MAIN',
+    });
+    // Close popup so user can click on the page
+    window.close();
+  } catch (e) {
+    console.error('Capture failed:', e);
+  }
+}
+
+function onAudioFile(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    chrome.storage.local.set({ autoTestAudio: reader.result });
+    $('audioStatus').textContent = `${file.name} (${(file.size / 1024).toFixed(0)}KB)`;
+  };
+  reader.readAsDataURL(file);
+}
+
+let testRunning = false;
+
+async function onToggleTest() {
+  const selector = $('capturedSelector').value;
+  if (!testRunning) {
+    if (!selector) { alert('Please capture a button first'); return; }
+    const interval = parseInt($('testInterval').value) || 30;
+    testRunning = true;
+    chrome.storage.local.set({
+      autoTestConfig: { running: true, selector, interval },
+    });
+    $('startTestBtn').textContent = 'Stop';
+    $('startTestBtn').className = 'btn-test running';
+    $('testStatus').textContent = 'Running...';
+  } else {
+    testRunning = false;
+    chrome.storage.local.set({
+      autoTestConfig: { running: false, selector, interval: parseInt($('testInterval').value) || 30 },
+    });
+    $('startTestBtn').textContent = 'Start';
+    $('startTestBtn').className = 'btn-test';
+    $('testStatus').textContent = 'Stopped';
+  }
+}
+
+function updateAutoTestUI(liveStats) {
+  if (!liveStats?.autoTest) return;
+  const at = liveStats.autoTest;
+  if (at.running) {
+    testRunning = true;
+    $('startTestBtn').textContent = 'Stop';
+    $('startTestBtn').className = 'btn-test running';
+    $('testStatus').textContent = `Cycle #${at.cycles}`;
+  }
+  if (at.hasAudio) {
+    $('audioStatus').textContent = `Audio loaded (${at.audioDuration.toFixed(1)}s)`;
+  }
+}
+
+async function loadAutoTestConfig() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get('autoTestConfig', (stored) => {
+      resolve(stored.autoTestConfig || {});
+    });
+  });
+}
+
+// --- Poll ---
+
 async function poll() {
   const config = await loadConfig();
   const liveStats = await queryActiveTab();
   updateStatus(config, liveStats);
+  updateAutoTestUI(liveStats);
 }
+
+// --- Init ---
 
 async function init() {
   const config = await loadConfig();
   updateConfigForm(config);
+
+  // Load auto-test config
+  const atConfig = await loadAutoTestConfig();
+  if (atConfig.selector) $('capturedSelector').value = atConfig.selector;
+  if (atConfig.interval) $('testInterval').value = atConfig.interval;
+  if (atConfig.running) {
+    testRunning = true;
+    $('startTestBtn').textContent = 'Stop';
+    $('startTestBtn').className = 'btn-test running';
+  }
+
+  // Check if audio is loaded
+  chrome.storage.local.get('autoTestAudio', (stored) => {
+    if (stored.autoTestAudio) {
+      $('audioStatus').textContent = 'Audio loaded';
+    }
+  });
+
   await poll();
+
   $('saveBtn').addEventListener('click', onSave);
+  $('captureBtn').addEventListener('click', onCapture);
+  $('audioFile').addEventListener('change', onAudioFile);
+  $('startTestBtn').addEventListener('click', onToggleTest);
+
   setInterval(poll, 2000);
 }
 

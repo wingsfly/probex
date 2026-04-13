@@ -187,3 +187,72 @@ button#saveBtn:hover {
 button#saveBtn:active {
   background: #1d4ed8;
 }
+
+/* Auto-Test section */
+.autotest {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #2a2a4a;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.btn-sm {
+  background: #334155;
+  color: #e2e8f0;
+  border: 1px solid #475569;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-sm:hover { background: #475569; }
+
+.btn-file {
+  cursor: pointer;
+  display: inline-block;
+}
+
+.audio-status {
+  font-size: 11px;
+  color: #888;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.test-status {
+  font-size: 11px;
+  color: #888;
+  flex: 1;
+}
+
+.btn-test {
+  background: #059669;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 16px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn-test:hover { background: #10b981; }
+
+.btn-test.running {
+  background: #dc2626;
+}
+
+.btn-test.running:hover { background: #ef4444; }

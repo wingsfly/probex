@@ -5,7 +5,8 @@
   "description": "Monitor WebRTC audio/video quality metrics and report to ProbeX as a remote probe",
   "permissions": [
     "storage",
-    "scripting"
+    "scripting",
+    "activeTab"
   ],
   "host_permissions": [
     "<all_urls>"

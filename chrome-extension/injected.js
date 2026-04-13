@@ -15,6 +15,225 @@
     window.RTCPeerConnection || window.webkitRTCPeerConnection;
   if (!OriginalRTCPeerConnection) return;
 
+  // ====== Audio Injection for Auto-Test ======
+  // Strategy: hook getUserMedia to return a proxy stream whose audio track we control.
+  // The app (Guidex/XRTC) uses receive-only PeerConnections for downstream, and sends
+  // mic audio upstream via a separate channel (WebSocket/HTTP). By hooking getUserMedia,
+  // we intercept the mic stream regardless of how the app transmits it.
+
+  const origGetUserMedia = navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices);
+  let audioCtx = null;
+  let audioBuffer = null;       // decoded AudioBuffer for test audio
+  let currentSource = null;     // active AudioBufferSourceNode
+  let micGainNode = null;       // controls real mic volume (0 when injecting)
+  let injectGainNode = null;    // controls injected audio volume (0 normally)
+  let streamDest = null;        // MediaStreamDestination → proxy audio track
+
+  function ensureAudioCtx() {
+    if (audioCtx) return;
+    audioCtx = new AudioContext();
+    streamDest = audioCtx.createMediaStreamDestination();
+    micGainNode = audioCtx.createGain();
+    micGainNode.gain.value = 1;
+    micGainNode.connect(streamDest);
+    injectGainNode = audioCtx.createGain();
+    injectGainNode.gain.value = 0;
+    injectGainNode.connect(streamDest);
+  }
+
+  // Hook getUserMedia — intercept audio streams.
+  // Must survive SES lockdown (Secure EcmaScript) which may freeze/overwrite properties.
+  // Hook at both prototype level and instance level, with Object.defineProperty for resilience.
+
+  const origProtoGUM = MediaDevices.prototype.getUserMedia;
+
+  async function hookedGetUserMedia(constraints) {
+    const realStream = await origProtoGUM.call(this, constraints);
+    if (!constraints?.audio) return realStream;
+
+    ensureAudioCtx();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+    try {
+      const micSource = audioCtx.createMediaStreamSource(realStream);
+      micSource.connect(micGainNode);
+    } catch (e) {
+      console.warn('[ProbeX] mic source connect error:', e.message);
+      return realStream;
+    }
+
+    const proxy = new MediaStream();
+    realStream.getVideoTracks().forEach(t => proxy.addTrack(t));
+    streamDest.stream.getAudioTracks().forEach(t => proxy.addTrack(t));
+
+    console.log('[ProbeX] getUserMedia intercepted: proxy stream returned');
+    return proxy;
+  }
+
+  // Apply hook at prototype level. Must stay writable so SES lockdown doesn't crash.
+  // We let SES overwrite it, then re-apply after SES finishes.
+  try {
+    MediaDevices.prototype.getUserMedia = hookedGetUserMedia;
+    console.log('[ProbeX] getUserMedia hook installed (prototype)');
+  } catch (e) {
+    console.warn('[ProbeX] getUserMedia hook FAILED:', e.message);
+  }
+
+  // Also hook the legacy API
+  if (navigator.getUserMedia) {
+    const origLegacy = navigator.getUserMedia.bind(navigator);
+    navigator.getUserMedia = function (constraints, onSuccess, onError) {
+      origLegacy(constraints, (stream) => {
+        if (!constraints?.audio) { onSuccess(stream); return; }
+        hookedGetUserMedia.call(navigator.mediaDevices, constraints)
+          .then(onSuccess).catch(onError);
+      }, onError);
+    };
+  }
+
+  // ====== Track WebSocket connections + monitor voiceDictation protocol ======
+  window.__probexWsList = [];
+  let voiceDictationWs = null;
+  let vdSendCount = 0;
+
+  const OrigWebSocket = window.WebSocket;
+  window.WebSocket = function (url, protocols) {
+    const ws = protocols ? new OrigWebSocket(url, protocols) : new OrigWebSocket(url);
+    window.__probexWsList.push(ws);
+    console.log('[ProbeX][TRACE] WebSocket created: ' + url);
+
+    if (url.includes('voiceDictation')) {
+      voiceDictationWs = ws;
+      vdSendCount = 0;
+      console.log('[ProbeX] voiceDictation WebSocket detected!');
+      ws.addEventListener('message', (ev) => {
+        if (typeof ev.data === 'string') {
+          console.log('[ProbeX][VD] recv: ' + ev.data.slice(0, 300));
+        }
+      });
+    }
+    return ws;
+  };
+  window.WebSocket.prototype = OrigWebSocket.prototype;
+  Object.keys(OrigWebSocket).forEach(k => { window.WebSocket[k] = OrigWebSocket[k]; });
+  ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach(k => { window.WebSocket[k] = OrigWebSocket[k]; });
+
+  // Hook WebSocket.prototype.send to intercept ALL sends (survives SES + prototype.call patterns)
+  const origWsSend = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (data) {
+    if (this === voiceDictationWs || (this.url && this.url.includes('voiceDictation'))) {
+      vdSendCount++;
+      if (vdSendCount <= 10) {
+        if (data instanceof ArrayBuffer) {
+          const hex = Array.from(new Uint8Array(data.slice(0, 32))).map(b => b.toString(16).padStart(2, '0')).join(' ');
+          console.log('[ProbeX][VD] send #' + vdSendCount + ' binary ' + data.byteLength + 'B | ' + hex);
+        } else if (data instanceof Blob) {
+          console.log('[ProbeX][VD] send #' + vdSendCount + ' blob ' + data.size + 'B type=' + data.type);
+        } else if (typeof data === 'string') {
+          console.log('[ProbeX][VD] send #' + vdSendCount + ' text: ' + data.slice(0, 300));
+        }
+      }
+    }
+    return origWsSend.call(this, data);
+  };
+
+  // ====== Track SpeechRecognition (may capture mic without getUserMedia) ======
+  const OrigSpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (OrigSpeechRecognition) {
+    const origStart = OrigSpeechRecognition.prototype.start;
+    OrigSpeechRecognition.prototype.start = function () {
+      console.log('[ProbeX][TRACE] SpeechRecognition.start() called');
+      return origStart.call(this);
+    };
+  }
+
+  // ====== Trace all possible audio capture paths ======
+  // The XRTC SDK might not use getUserMedia directly. Detect how it captures audio.
+
+  const origCreateMediaStreamSource = AudioContext.prototype.createMediaStreamSource;
+  AudioContext.prototype.createMediaStreamSource = function (stream) {
+    console.log('[ProbeX][TRACE] AudioContext.createMediaStreamSource called, tracks:', stream.getAudioTracks().map(t => t.label));
+    return origCreateMediaStreamSource.call(this, stream);
+  };
+
+  const origMediaRecorder = window.MediaRecorder;
+  if (origMediaRecorder) {
+    window.MediaRecorder = function (stream, options) {
+      console.log('[ProbeX][TRACE] MediaRecorder created, audio tracks:', stream.getAudioTracks().map(t => t.label));
+      return new origMediaRecorder(stream, options);
+    };
+    window.MediaRecorder.prototype = origMediaRecorder.prototype;
+    Object.keys(origMediaRecorder).forEach(k => { window.MediaRecorder[k] = origMediaRecorder[k]; });
+  }
+
+  // Hook addTrack/addStream on PeerConnection to detect any send tracks
+  const origAddTrack = OriginalRTCPeerConnection.prototype.addTrack;
+  OriginalRTCPeerConnection.prototype.addTrack = function (track, ...streams) {
+    console.log('[ProbeX][TRACE] PC.addTrack kind=' + track.kind + ' label=' + track.label);
+    return origAddTrack.call(this, track, ...streams);
+  };
+
+  const origAddStream = OriginalRTCPeerConnection.prototype.addStream;
+  if (origAddStream) {
+    OriginalRTCPeerConnection.prototype.addStream = function (stream) {
+      console.log('[ProbeX][TRACE] PC.addStream tracks:', stream.getTracks().map(t => t.kind + ':' + t.label));
+      return origAddStream.call(this, stream);
+    };
+  }
+
+  // Periodic check: re-apply hooks if SES/lockdown overwrites them.
+  const hookedWsSend = WebSocket.prototype.send; // save our hooked version
+  let hookCheckInterval = setInterval(() => {
+    try {
+      if (MediaDevices.prototype.getUserMedia !== hookedGetUserMedia) {
+        console.warn('[ProbeX] getUserMedia prototype hook overwritten! Re-applying...');
+        MediaDevices.prototype.getUserMedia = hookedGetUserMedia;
+      }
+      if (navigator.mediaDevices &&
+          Object.prototype.hasOwnProperty.call(navigator.mediaDevices, 'getUserMedia') &&
+          navigator.mediaDevices.getUserMedia !== hookedGetUserMedia) {
+        console.warn('[ProbeX] getUserMedia instance-level override detected! Re-applying...');
+        navigator.mediaDevices.getUserMedia = hookedGetUserMedia;
+      }
+      // Also protect WebSocket.prototype.send hook
+      if (WebSocket.prototype.send !== hookedWsSend) {
+        console.warn('[ProbeX] WebSocket.prototype.send hook overwritten! Re-applying...');
+        WebSocket.prototype.send = hookedWsSend;
+      }
+    } catch (e) {}
+  }, 200);
+  setTimeout(() => clearInterval(hookCheckInterval), 30000);
+
+  /** Play test audio into the hooked stream. Returns promise resolving when playback ends. */
+  function playTestAudio() {
+    return new Promise(async (resolve) => {
+      if (!audioBuffer) { console.warn('[ProbeX] No audio buffer loaded'); resolve(); return; }
+
+      ensureAudioCtx();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+      // Mute real mic, enable injection path
+      micGainNode.gain.value = 0;
+      injectGainNode.gain.value = 1;
+
+      if (currentSource) { try { currentSource.stop(); } catch (e) {} }
+
+      currentSource = audioCtx.createBufferSource();
+      currentSource.buffer = audioBuffer;
+      currentSource.connect(injectGainNode);
+      currentSource.onended = () => {
+        // Restore: mic on, injection off
+        micGainNode.gain.value = 1;
+        injectGainNode.gain.value = 0;
+        currentSource = null;
+        console.log('[ProbeX] Test audio ended, mic restored');
+        resolve();
+      };
+      currentSource.start();
+      console.log('[ProbeX] Playing test audio (' + audioBuffer.duration.toFixed(1) + 's) via getUserMedia proxy');
+    });
+  }
+
   // --- Config (injected via postMessage from content-script) ---
   let hubUrl = 'http://localhost:8080';
   let probeName = 'webrtc-browser';
@@ -66,6 +285,22 @@
 
     if (event.data?.type === 'probex-stop') {
       stopAll();
+      return;
+    }
+
+    // Auto-test: receive audio file as base64 data URL
+    if (event.data?.type === 'probex-audio') {
+      loadAudioFromDataUrl(event.data.dataUrl);
+      return;
+    }
+
+    // Auto-test: start/stop
+    if (event.data?.type === 'probex-autotest-start') {
+      startAutoTest(event.data.selector, event.data.interval);
+      return;
+    }
+    if (event.data?.type === 'probex-autotest-stop') {
+      stopAutoTest();
       return;
     }
   });
@@ -394,6 +629,229 @@
     return now;
   }
 
+  // ====== Auto-Test: Audio Loading ======
+
+  let audioLoadPromise = null;
+
+  function loadAudioFromDataUrl(dataUrl) {
+    if (!dataUrl) return Promise.resolve();
+    audioLoadPromise = (async () => {
+      try {
+        ensureAudioCtx();
+        const resp = await fetch(dataUrl);
+        const arrayBuf = await resp.arrayBuffer();
+        audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
+        console.log('[ProbeX] Audio loaded: ' + audioBuffer.duration.toFixed(1) + 's, ' + audioBuffer.numberOfChannels + ' ch, ' + audioBuffer.sampleRate + ' Hz');
+      } catch (e) {
+        console.error('[ProbeX] Failed to decode audio:', e.message);
+        audioBuffer = null;
+      }
+    })();
+    return audioLoadPromise;
+  }
+
+  // ====== Auto-Test: Element Capture ======
+
+  function generateSelector(el) {
+    // Try id first
+    if (el.id) return '#' + CSS.escape(el.id);
+
+    // Try unique class name (filter out framework-generated ones like data-v-xxx)
+    if (el.className && typeof el.className === 'string') {
+      const classes = el.className.trim().split(/\s+/).filter(c =>
+        c && !/^[\d]/.test(c) && !/^data-v-/.test(c) && c.length > 2
+      );
+      for (const cls of classes) {
+        const sel = el.tagName.toLowerCase() + '.' + CSS.escape(cls);
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      }
+      // Try class combination
+      if (classes.length >= 2) {
+        const sel = el.tagName.toLowerCase() + '.' + classes.slice(0, 3).map(c => CSS.escape(c)).join('.');
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      }
+    }
+
+    // Try unique attribute (aria-label, title, alt, role, etc.)
+    for (const attr of ['aria-label', 'title', 'alt', 'role', 'name']) {
+      const val = el.getAttribute(attr);
+      if (val) {
+        const sel = el.tagName.toLowerCase() + '[' + attr + '="' + CSS.escape(val) + '"]';
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      }
+    }
+
+    // Try src attribute for images
+    if (el.tagName === 'IMG' && el.src) {
+      // Use the filename part of src for a partial match
+      const filename = el.src.split('/').pop()?.split('?')[0];
+      if (filename) {
+        const sel = 'img[src*="' + CSS.escape(filename) + '"]';
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      }
+    }
+
+    // Fallback: short path (max 3 levels, no nth-child)
+    const parts = [];
+    let node = el;
+    while (node && node !== document.body && parts.length < 3) {
+      let seg = node.tagName.toLowerCase();
+      if (node.className && typeof node.className === 'string') {
+        const cls = node.className.trim().split(/\s+/).filter(c =>
+          c && c.length > 2 && !/^data-v-/.test(c)
+        ).slice(0, 2);
+        if (cls.length) seg += '.' + cls.map(c => CSS.escape(c)).join('.');
+      }
+      parts.unshift(seg);
+      node = node.parentElement;
+    }
+    return parts.join(' ');
+  }
+
+  window.__probexStartCapture = function () {
+    // Create overlay
+    const overlay = document.createElement('div');
+    overlay.id = '__probex-capture-overlay';
+    Object.assign(overlay.style, {
+      position: 'fixed', top: '0', left: '0', width: '100vw', height: '100vh',
+      zIndex: '2147483647', cursor: 'crosshair', background: 'rgba(0,0,0,0.15)',
+    });
+
+    const highlight = document.createElement('div');
+    highlight.id = '__probex-capture-highlight';
+    Object.assign(highlight.style, {
+      position: 'fixed', border: '2px solid #3b82f6', borderRadius: '4px',
+      background: 'rgba(59,130,246,0.15)', pointerEvents: 'none', zIndex: '2147483647',
+      display: 'none', transition: 'all 0.1s',
+    });
+
+    const label = document.createElement('div');
+    Object.assign(label.style, {
+      position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
+      background: '#1e293b', color: '#e2e8f0', padding: '8px 16px', borderRadius: '8px',
+      fontSize: '13px', zIndex: '2147483647', fontFamily: 'system-ui',
+    });
+    label.textContent = 'Click on the target button to capture it. Press Esc to cancel.';
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(highlight);
+    document.body.appendChild(label);
+
+    let lastTarget = null;
+
+    function onMove(e) {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || el === overlay || el === highlight || el === label) {
+        highlight.style.display = 'none';
+        lastTarget = null;
+        return;
+      }
+      lastTarget = el;
+      const rect = el.getBoundingClientRect();
+      Object.assign(highlight.style, {
+        display: 'block', top: rect.top + 'px', left: rect.left + 'px',
+        width: rect.width + 'px', height: rect.height + 'px',
+      });
+    }
+
+    function onClick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      // Temporarily hide overlay to get the real element underneath
+      overlay.style.pointerEvents = 'none';
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      overlay.style.pointerEvents = '';
+      cleanup();
+      if (el) {
+        const selector = generateSelector(el);
+        console.log('[ProbeX] Captured element:', selector, el);
+        // Report back via postMessage
+        window.postMessage({ type: 'probex-capture-result', selector }, '*');
+      }
+    }
+
+    function onKeydown(e) {
+      if (e.key === 'Escape') { cleanup(); }
+    }
+
+    function cleanup() {
+      overlay.remove();
+      highlight.remove();
+      label.remove();
+      document.removeEventListener('keydown', onKeydown, true);
+    }
+
+    overlay.addEventListener('mousemove', onMove);
+    overlay.addEventListener('click', onClick, true);
+    document.addEventListener('keydown', onKeydown, true);
+  };
+
+  // ====== Auto-Test: Loop ======
+
+  let autoTestTimer = null;
+  let autoTestRunning = false;
+  let autoTestSelector = '';
+  let autoTestInterval = 30000;
+  let autoTestCycleCount = 0;
+
+  async function autoTestCycle() {
+    if (!autoTestRunning) return;
+
+    const btn = document.querySelector(autoTestSelector);
+    if (!btn) {
+      console.warn('[ProbeX] Auto-test: button not found with selector:', autoTestSelector);
+      return;
+    }
+    if (!audioBuffer) {
+      console.warn('[ProbeX] Auto-test: no audio loaded');
+      return;
+    }
+
+    autoTestCycleCount++;
+    console.log('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': clicking button');
+
+    // Click to start conversation
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    // Short delay for the app to start capturing audio
+    await new Promise(r => setTimeout(r, 500));
+
+    // Play audio into the hooked MediaStream
+    await playTestAudio();
+
+    // Extra silence delay for VAD to detect end-of-speech
+    console.log('[ProbeX] Auto-test cycle #' + autoTestCycleCount + ': audio done, waiting for VAD');
+  }
+
+  async function startAutoTest(selector, interval) {
+    autoTestSelector = selector;
+    autoTestInterval = (interval || 30) * 1000;
+    autoTestRunning = true;
+
+    // Wait for audio to finish loading if it's still being decoded
+    if (audioLoadPromise) await audioLoadPromise;
+    autoTestCycleCount = 0;
+
+    console.log('[ProbeX] Auto-test started: selector=' + selector + ' interval=' + (autoTestInterval / 1000) + 's hasAudio=' + !!audioBuffer);
+
+    // Run first cycle immediately
+    autoTestCycle();
+
+    // Schedule subsequent cycles
+    if (autoTestTimer) clearInterval(autoTestTimer);
+    autoTestTimer = setInterval(autoTestCycle, autoTestInterval);
+  }
+
+  function stopAutoTest() {
+    autoTestRunning = false;
+    if (autoTestTimer) { clearInterval(autoTestTimer); autoTestTimer = null; }
+    if (currentSource) { try { currentSource.stop(); } catch (e) {} }
+    // Restore mic
+    if (micGainNode) micGainNode.gain.value = 1;
+    if (injectGainNode) injectGainNode.gain.value = 0;
+    console.log('[ProbeX] Auto-test stopped after ' + autoTestCycleCount + ' cycles');
+  }
+
   // ====== Timers ======
 
   function startCollectLoop() {
@@ -412,6 +870,56 @@
     if (pushTimer) { clearInterval(pushTimer); pushTimer = null; }
   }
 
+  // ====== Diagnostic (call window.__probexDiag() in console during active call) ======
+
+  window.__probexDiag = () => {
+    console.log('=== ProbeX Diagnostic ===');
+    console.log('Connections tracked:', connections.size);
+    for (const [id, entry] of connections) {
+      const pc = entry.pc;
+      console.log('--- PC #' + id + ' state=' + pc.connectionState + ' ice=' + pc.iceConnectionState + ' ---');
+      if (pc.getSenders) {
+        const senders = pc.getSenders();
+        console.log('  Senders (' + senders.length + '):');
+        senders.forEach((s, i) => {
+          console.log('    [' + i + '] kind=' + (s.track?.kind || 'null') + ' id=' + (s.track?.id || 'null') + ' enabled=' + s.track?.enabled + ' readyState=' + s.track?.readyState);
+        });
+      } else {
+        console.log('  getSenders() not available');
+      }
+      if (pc.getReceivers) {
+        const receivers = pc.getReceivers();
+        console.log('  Receivers (' + receivers.length + '):');
+        receivers.forEach((r, i) => {
+          console.log('    [' + i + '] kind=' + (r.track?.kind || 'null') + ' id=' + (r.track?.id || 'null'));
+        });
+      }
+      if (pc.getTransceivers) {
+        const transceivers = pc.getTransceivers();
+        console.log('  Transceivers (' + transceivers.length + '):');
+        transceivers.forEach((t, i) => {
+          console.log('    [' + i + '] mid=' + t.mid + ' direction=' + t.direction + ' currentDir=' + t.currentDirection + ' sender.track=' + (t.sender.track?.kind || 'null') + ' receiver.track=' + (t.receiver.track?.kind || 'null'));
+        });
+      }
+    }
+    console.log('audioBuffer:', audioBuffer ? (audioBuffer.duration.toFixed(1) + 's') : 'null');
+
+    // Check for iframes
+    const iframes = document.querySelectorAll('iframe');
+    console.log('Iframes on page:', iframes.length);
+    iframes.forEach((f, i) => {
+      console.log('  [' + i + '] src=' + (f.src || '(empty)') + ' name=' + (f.name || ''));
+    });
+
+    // Check for active WebSocket connections (hook was applied at startup)
+    console.log('Active WebSockets tracked:', (window.__probexWsList || []).length);
+    (window.__probexWsList || []).forEach((ws, i) => {
+      console.log('  [' + i + '] url=' + ws.url + ' state=' + ws.readyState);
+    });
+
+    console.log('=== End Diagnostic ===');
+  };
+
   // ====== API for popup (called via chrome.scripting.executeScript with world: MAIN) ======
 
   window.__probexStats = () => ({
@@ -422,6 +930,13 @@
     latest: latestMetrics,
     bufferSize: resultBuffer.length,
     stopped,
+    autoTest: {
+      running: autoTestRunning,
+      selector: autoTestSelector,
+      cycles: autoTestCycleCount,
+      hasAudio: !!audioBuffer,
+      audioDuration: audioBuffer?.duration || 0,
+    },
   });
 
   // ====== Resume (called when extension re-injects content-script) ======
