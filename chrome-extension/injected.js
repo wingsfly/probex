@@ -460,7 +460,8 @@
   async function probexFetch(url, options) {
     // Try proxy through content-script → background (bypasses mixed content)
     const proxyResult = await proxyFetch(url, options);
-    if (proxyResult) {
+    // Only trust proxy if it got a real HTTP response (status > 0)
+    if (proxyResult && proxyResult.status > 0) {
       return { ok: proxyResult.ok, status: proxyResult.status };
     }
     // Fallback: direct fetch (works for localhost, same-protocol, etc.)
