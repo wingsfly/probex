@@ -1097,19 +1097,21 @@
 
     console.log('[ProbeX] Auto-test started: selector=' + selector + ' interval=' + (autoTestInterval / 1000) + 's hasAudio=' + !!audioBuffer);
 
-    // Run first cycle immediately
-    autoTestCycle();
-
-    // Schedule subsequent cycles
-    if (autoTestTimer) clearInterval(autoTestTimer);
-    autoTestTimer = setInterval(autoTestCycle, autoTestInterval);
+    // Run cycles sequentially: wait for each cycle to complete, then wait interval
+    (async function loop() {
+      while (autoTestRunning) {
+        await autoTestCycle();
+        if (!autoTestRunning) break;
+        // Wait interval AFTER cycle completes (not overlapping)
+        await new Promise(r => { autoTestTimer = setTimeout(r, autoTestInterval); });
+      }
+    })();
   }
 
   function stopAutoTest() {
     autoTestRunning = false;
-    if (autoTestTimer) { clearInterval(autoTestTimer); autoTestTimer = null; }
+    if (autoTestTimer) { clearTimeout(autoTestTimer); autoTestTimer = null; }
     if (currentSource) { try { currentSource.stop(); } catch (e) {} }
-    // Restore mic
     if (micGainNode) micGainNode.gain.value = 1;
     if (injectGainNode) injectGainNode.gain.value = 0;
     console.log('[ProbeX] Auto-test stopped after ' + autoTestCycleCount + ' cycles');
