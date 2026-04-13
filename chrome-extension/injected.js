@@ -866,7 +866,7 @@
 
     const btn = document.querySelector(autoTestSelector);
     if (!btn) {
-      console.warn('[ProbeX] Auto-test: button not found with selector:', autoTestSelector);
+      // Silently skip — button doesn't exist on this page (e.g. config page)
       return;
     }
     if (!audioBuffer) {
