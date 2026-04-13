@@ -41,13 +41,17 @@ export default function Results() {
     return now.toISOString();
   };
 
-  const params = new URLSearchParams({ limit: '500', from: fromTime() });
+  // Scale limit by time range; larger ranges pull more data
+  const limitByRange: Record<string, string> = { '1h': '2000', '6h': '5000', '24h': '15000', '7d': '50000' };
+  // Larger ranges: slower refresh (no point refreshing 7d data every 10s)
+  const refreshByRange: Record<string, number | false> = { '1h': 10000, '6h': 30000, '24h': 60000, '7d': false };
+  const params = new URLSearchParams({ limit: limitByRange[timeRange] ?? '2000', from: fromTime() });
   if (taskId) params.set('task_id', taskId);
 
   const { data, isLoading } = useQuery({
     queryKey: ['results', taskId, timeRange],
     queryFn: () => api.getResults(params.toString()),
-    refetchInterval: 10000,
+    refetchInterval: refreshByRange[timeRange] ?? 10000,
   });
 
   const { data: tasksData } = useQuery({
@@ -126,6 +130,9 @@ export default function Results() {
     return m;
   }, [involvedTaskIds, taskMap]);
 
+  // Downsample: keep at most MAX_CHART_POINTS for chart rendering
+  const MAX_CHART_POINTS = 1000;
+
   // Multi-task chart data
   const multiTaskChartData = useMemo(() => {
     if (!isMultiTask) return [];
@@ -142,8 +149,9 @@ export default function Results() {
       results.forEach(r => m.set(r.timestamp, r.latency_ms));
       lookup.set(tid, m);
     });
-    return uniqueTimes.map(ts => {
-      const row: Record<string, any> = { time: new Date(ts).toLocaleTimeString() };
+    const sampledTimes = downsample(uniqueTimes, MAX_CHART_POINTS);
+    return sampledTimes.map((ts) => {
+      const row: Record<string, any> = { time: new Date(ts).getTime() };
       involvedTaskIds.forEach(tid => {
         const taskName = taskMap.get(tid)?.name ?? tid.replace('ext_', '');
         row[taskName] = lookup.get(tid)?.get(ts) ?? undefined;
@@ -152,44 +160,86 @@ export default function Results() {
     });
   }, [isMultiTask, resultsAsc, involvedTaskIds, taskMap]);
 
-  // Single task chart data — auto-include all present fields
+  // Fields where we want MAX (not avg) to preserve spikes/anomalies
+  const maxFields = new Set(['Loss%', 'Jitter', 'packet_loss_pct', 'jitter_ms',
+    'effective_loss_pct', 'out_of_order_pct', 'retransmits']);
+
+  // Single task chart data — bucket-aggregate to preserve anomalies
   const singleTaskChartData = useMemo(() => {
     if (isMultiTask) return [];
-    return resultsAsc.map(r => {
-      const extra = (r.extra ?? {}) as Record<string, any>;
-      const row: Record<string, any> = {
-        time: new Date(r.timestamp).toLocaleTimeString(),
-      };
-      // Standard fields
-      chartableStdFields.forEach(f => {
-        const v = (r as any)[f.key];
-        if (v != null) {
-          if (f.key === 'download_bps' || f.key === 'upload_bps') {
-            row[f.label] = v / 1e6; // to Mbps
-          } else {
-            row[f.label] = v;
-          }
-        }
+    if (resultsAsc.length <= MAX_CHART_POINTS) {
+      // No need to aggregate, use raw data
+      return resultsAsc.map(r => {
+        const extra = (r.extra ?? {}) as Record<string, any>;
+        const row: Record<string, any> = { time: new Date(r.timestamp).getTime() };
+        chartableStdFields.forEach(f => {
+          const v = (r as any)[f.key];
+          if (v != null) row[f.label] = f.key === 'download_bps' || f.key === 'upload_bps' ? v / 1e6 : v;
+        });
+        numericExtraFields.forEach(k => {
+          if (extra[k] != null && typeof extra[k] === 'number') row[`extra:${k}`] = extra[k];
+        });
+        return row;
       });
-      // Extra fields (numeric only for chart)
-      numericExtraFields.forEach(k => {
-        if (extra[k] != null && typeof extra[k] === 'number') {
-          row[`extra:${k}`] = extra[k];
-        }
-      });
-      return row;
-    });
-  }, [isMultiTask, resultsAsc, chartableStdFields, numericExtraFields]);
+    }
 
-  // Build chart line definitions
+    // Bucket-aggregate: split into MAX_CHART_POINTS buckets, compute avg/max per field
+    const bucketSize = Math.ceil(resultsAsc.length / MAX_CHART_POINTS);
+    const chartData: Record<string, any>[] = [];
+
+    for (let i = 0; i < resultsAsc.length; i += bucketSize) {
+      const bucket = resultsAsc.slice(i, Math.min(i + bucketSize, resultsAsc.length));
+      const midpoint = bucket[Math.floor(bucket.length / 2)];
+      const row: Record<string, any> = { time: new Date(midpoint.timestamp).getTime() };
+
+      // For each field, collect values from the bucket
+      chartableStdFields.forEach(f => {
+        const vals: number[] = [];
+        bucket.forEach(r => {
+          let v = (r as any)[f.key];
+          if (v != null) {
+            if (f.key === 'download_bps' || f.key === 'upload_bps') v = v / 1e6;
+            vals.push(v);
+          }
+        });
+        if (vals.length > 0) {
+          // Use MAX for anomaly fields (loss, jitter), AVG for everything else
+          row[f.label] = maxFields.has(f.label) || maxFields.has(f.key)
+            ? Math.max(...vals)
+            : vals.reduce((s, v) => s + v, 0) / vals.length;
+        }
+      });
+
+      numericExtraFields.forEach(k => {
+        const vals: number[] = [];
+        bucket.forEach(r => {
+          const extra = (r.extra ?? {}) as Record<string, any>;
+          if (extra[k] != null && typeof extra[k] === 'number') vals.push(extra[k]);
+        });
+        if (vals.length > 0) {
+          row[`extra:${k}`] = maxFields.has(k)
+            ? Math.max(...vals)
+            : vals.reduce((s, v) => s + v, 0) / vals.length;
+        }
+      });
+
+      chartData.push(row);
+    }
+    return chartData;
+  }, [isMultiTask, resultsAsc, chartableStdFields, numericExtraFields, MAX_CHART_POINTS, maxFields]);
+
+  // Build chart line definitions, each tagged with a yAxisId by unit group
   const chartLines = useMemo(() => {
-    const lines: { key: string; name: string; color: string }[] = [];
+    const lines: { key: string; name: string; color: string; yAxisId: string }[] = [];
     let ci = 0;
     chartableStdFields.forEach(f => {
-      lines.push({ key: f.label, name: `${f.label} (${f.unit})`, color: EXTRA_COLORS[ci++ % EXTRA_COLORS.length] });
+      const yAxisId = (f.key === 'download_bps' || f.key === 'upload_bps') ? 'bps' : 'default';
+      lines.push({ key: f.label, name: `${f.label} (${f.unit})`, color: EXTRA_COLORS[ci++ % EXTRA_COLORS.length], yAxisId });
     });
     numericExtraFields.forEach(k => {
-      lines.push({ key: `extra:${k}`, name: k, color: EXTRA_COLORS[ci++ % EXTRA_COLORS.length] });
+      // available_outgoing_bitrate is bps-scale, everything else is small-scale
+      const yAxisId = k === 'available_outgoing_bitrate' ? 'bps' : 'default';
+      lines.push({ key: `extra:${k}`, name: k, color: EXTRA_COLORS[ci++ % EXTRA_COLORS.length], yAxisId });
     });
     return lines;
   }, [chartableStdFields, presentExtraFields]);
@@ -210,12 +260,20 @@ export default function Results() {
     }
   };
 
-  // Detect primary Y-axis unit
-  const primaryUnit = useMemo(() => {
-    if (chartableStdFields.some(f => f.key === 'download_bps' || f.key === 'upload_bps')) return 'Mbps';
-    if (chartableStdFields.some(f => f.unit === 'ms')) return 'ms';
-    return '';
-  }, [chartableStdFields]);
+  // Determine which Y-axis groups have visible (non-hidden) lines
+  const hasBpsAxis = chartLines.some(l => l.yAxisId === 'bps' && !hiddenLines.has(l.key));
+  const hasDefaultAxis = chartLines.some(l => l.yAxisId === 'default' && !hiddenLines.has(l.key));
+
+  // Detect default-axis unit from visible lines
+  const defaultAxisUnit = useMemo(() => {
+    const visibleStd = chartableStdFields.filter(f => {
+      const key = f.label;
+      return !hiddenLines.has(key) && f.key !== 'download_bps' && f.key !== 'upload_bps';
+    });
+    if (visibleStd.length === 0) return '';
+    const units = new Set(visibleStd.map(f => f.unit));
+    return units.size === 1 ? [...units][0] : '';
+  }, [chartableStdFields, hiddenLines]);
 
   return (
     <div>
@@ -256,16 +314,34 @@ export default function Results() {
           {/* Chart */}
           {hasAnyData && (
             <div style={{ background: '#fff', borderRadius: 8, padding: '1rem', border: '1px solid #e5e7eb', marginBottom: '1rem' }}>
-              <h2 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '0.5rem' }}>
-                {isMultiTask ? 'Latency by Task' : 'Metrics Over Time'}
-              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <h2 style={{ fontSize: '1rem', fontWeight: 500, margin: 0 }}>
+                  {isMultiTask ? 'Latency by Task' : 'Metrics Over Time'}
+                </h2>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button onClick={() => setHiddenLines(new Set())}
+                    style={legendBtnStyle} title="Show all metrics">All</button>
+                  <button onClick={() => setHiddenLines(new Set(chartLines.map(l => l.key)))}
+                    style={legendBtnStyle} title="Hide all metrics">None</button>
+                  <button onClick={() => {
+                    const allKeys = new Set(chartLines.map(l => l.key));
+                    setHiddenLines(prev => {
+                      const next = new Set<string>();
+                      allKeys.forEach(k => { if (!prev.has(k)) next.add(k); });
+                      return next;
+                    });
+                  }} style={legendBtnStyle} title="Invert selection">Invert</button>
+                </div>
+              </div>
               <ResponsiveContainer width="100%" height={300}>
                 {isMultiTask ? (
                   <LineChart data={multiTaskChartData}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11 }} />
+                    <XAxis dataKey="time" type="number" scale="time" domain={['dataMin', 'dataMax']}
+                      ticks={generateTimeTicks(multiTaskChartData)}
+                      tickFormatter={formatXTick} tick={{ fontSize: 10 }} angle={-25} textAnchor="end" height={50} />
                     <YAxis tick={{ fontSize: 11 }} unit="ms" />
-                    <Tooltip />
+                    <Tooltip labelFormatter={(v) => typeof v === 'number' ? formatTooltipTime(v) : v} />
                     <Legend onClick={(e) => toggleLine(e.dataKey as string)} wrapperStyle={{ cursor: 'pointer' }}
                       formatter={(value, entry) => (
                         <span style={{
@@ -280,9 +356,14 @@ export default function Results() {
                 ) : (
                   <LineChart data={singleTaskChartData}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} unit={primaryUnit} />
-                    <Tooltip />
+                    <XAxis dataKey="time" type="number" scale="time" domain={['dataMin', 'dataMax']}
+                      ticks={generateTimeTicks(singleTaskChartData)}
+                      tickFormatter={formatXTick} tick={{ fontSize: 10 }} angle={-25} textAnchor="end" height={50} />
+                    <YAxis yAxisId="default" tick={{ fontSize: 11 }} unit={defaultAxisUnit}
+                      hide={!hasDefaultAxis} domain={['auto', 'auto']} />
+                    <YAxis yAxisId="bps" orientation="right" tick={{ fontSize: 11 }} unit="Mbps"
+                      hide={!hasBpsAxis} domain={['auto', 'auto']} />
+                    <Tooltip labelFormatter={(v) => typeof v === 'number' ? formatTooltipTime(v) : v} />
                     <Legend onClick={(e) => toggleLine(e.dataKey as string)} wrapperStyle={{ cursor: 'pointer' }}
                       formatter={(value, entry) => (
                         <span style={{
@@ -292,7 +373,7 @@ export default function Results() {
                       )} />
                     {chartLines.map(line => (
                       <Line key={line.key} type="monotone" dataKey={line.key} stroke={line.color}
-                        name={line.name} dot={false} hide={hiddenLines.has(line.key)} />
+                        yAxisId={line.yAxisId} name={line.name} dot={false} hide={hiddenLines.has(line.key)} connectNulls />
                     ))}
                   </LineChart>
                 )}
@@ -314,7 +395,7 @@ export default function Results() {
                 </tr>
               </thead>
               <tbody>
-                {resultsDesc.slice(0, 200).map((r) => {
+                {resultsDesc.slice(0, 500).map((r) => {
                   const task = taskMap.get(r.task_id);
                   const extra = (r.extra ?? {}) as Record<string, any>;
                   return (
@@ -363,9 +444,63 @@ export default function Results() {
   );
 }
 
+// Track the last displayed day to show date only at day boundaries on X axis.
+let _lastTickDay = '';
+
+function formatXTick(epochMs: number): string {
+  const d = new Date(epochMs);
+  const day = `${d.getMonth() + 1}/${d.getDate()}`;
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  if (day !== _lastTickDay) {
+    _lastTickDay = day;
+    return `${day} ${time}`;
+  }
+  return time;
+}
+
+/** Generate evenly-spaced tick values so the X-axis never gets overcrowded. */
+function generateTimeTicks(data: Record<string, any>[], maxTicks = 8): number[] {
+  if (data.length === 0) return [];
+  const times = data.map(d => d.time as number).filter(t => typeof t === 'number' && isFinite(t));
+  if (times.length === 0) return [];
+  const min = times[0];
+  const max = times[times.length - 1];
+  if (min === max) return [min];
+  const count = Math.min(maxTicks, times.length);
+  const step = (max - min) / (count - 1);
+  const ticks: number[] = [];
+  for (let i = 0; i < count; i++) {
+    ticks.push(Math.round(min + step * i));
+  }
+  return ticks;
+}
+
+function formatTooltipTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleString();
+}
+
+// Downsample an array to at most maxPoints entries, evenly spaced.
+function downsample<T>(arr: T[], maxPoints: number): T[] {
+  if (arr.length <= maxPoints) return arr;
+  const step = arr.length / maxPoints;
+  const result: T[] = [];
+  for (let i = 0; i < maxPoints; i++) {
+    result.push(arr[Math.floor(i * step)]);
+  }
+  // Always include last element
+  if (result[result.length - 1] !== arr[arr.length - 1]) {
+    result.push(arr[arr.length - 1]);
+  }
+  return result;
+}
+
 const selectStyle: React.CSSProperties = {
   padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: 6,
   fontSize: '0.875rem', background: '#fff',
 };
 const thStyle: React.CSSProperties = { padding: '0.75rem 0.5rem', fontWeight: 500 };
 const tdStyle: React.CSSProperties = { padding: '0.5rem' };
+const legendBtnStyle: React.CSSProperties = {
+  padding: '2px 10px', border: '1px solid #d1d5db', borderRadius: 4,
+  background: '#f9fafb', fontSize: '0.75rem', cursor: 'pointer', color: '#374151',
+};

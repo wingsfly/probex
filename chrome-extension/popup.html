@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>ProbeX WebRTC Monitor</h1>
+      <div class="status-badge" id="statusBadge">--</div>
+    </header>
+
+    <!-- Live Metrics -->
+    <section class="metrics" id="metricsSection">
+      <div class="metric-row">
+        <span class="metric-label">RTT</span>
+        <span class="metric-value" id="metricRtt">--</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Jitter</span>
+        <span class="metric-value" id="metricJitter">--</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Loss</span>
+        <span class="metric-value" id="metricLoss">--</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Down</span>
+        <span class="metric-value" id="metricDown">--</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Up</span>
+        <span class="metric-value" id="metricUp">--</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">FPS</span>
+        <span class="metric-value" id="metricFps">--</span>
+      </div>
+    </section>
+
+    <!-- Stats -->
+    <section class="stats-bar">
+      <span>Connections: <b id="connCount">0</b></span>
+      <span>Push: <b id="pushOk">0</b>/<b id="pushFail">0</b></span>
+      <span id="lastPush"></span>
+    </section>
+
+    <!-- Config -->
+    <section class="config">
+      <div class="field">
+        <label for="hubUrl">Hub URL</label>
+        <input type="text" id="hubUrl" placeholder="http://localhost:8080">
+      </div>
+      <div class="field">
+        <label for="probeName">Probe Name</label>
+        <input type="text" id="probeName" placeholder="webrtc-browser">
+      </div>
+      <div class="field">
+        <label for="agentId">Agent ID</label>
+        <input type="text" id="agentId" placeholder="auto-generated">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="collectInterval">Collect (s)</label>
+          <input type="number" id="collectInterval" min="1" max="10" step="1">
+        </div>
+        <div class="field">
+          <label for="pushInterval">Push (s)</label>
+          <input type="number" id="pushInterval" min="3" max="30" step="1">
+        </div>
+      </div>
+      <div class="field-row actions">
+        <label class="toggle">
+          <input type="checkbox" id="enabled">
+          <span>Enabled</span>
+        </label>
+        <button id="saveBtn">Save</button>
+      </div>
+    </section>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
