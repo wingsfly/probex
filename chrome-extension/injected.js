@@ -48,25 +48,32 @@
   const origProtoGUM = MediaDevices.prototype.getUserMedia;
 
   async function hookedGetUserMedia(constraints) {
-    const realStream = await origProtoGUM.call(this, constraints);
-    if (!constraints?.audio) return realStream;
+    if (!constraints?.audio) {
+      return origProtoGUM.call(this, constraints);
+    }
 
     ensureAudioCtx();
     if (audioCtx.state === 'suspended') await audioCtx.resume();
 
+    // Try to get real mic stream; if no mic available, create a silent proxy anyway
+    let realStream = null;
     try {
+      realStream = await origProtoGUM.call(this, constraints);
+      // Connect real mic to our mixer
       const micSource = audioCtx.createMediaStreamSource(realStream);
       micSource.connect(micGainNode);
     } catch (e) {
-      console.warn('[ProbeX] mic source connect error:', e.message);
-      return realStream;
+      console.warn('[ProbeX] getUserMedia failed (' + e.name + '), returning silent proxy stream');
+      // No mic — return proxy with silent audio (will be filled by test audio injection)
     }
 
     const proxy = new MediaStream();
-    realStream.getVideoTracks().forEach(t => proxy.addTrack(t));
+    // Keep video tracks from real stream if available
+    if (realStream) realStream.getVideoTracks().forEach(t => proxy.addTrack(t));
+    // Audio from our mixer (silent when no mic, test audio when playing)
     streamDest.stream.getAudioTracks().forEach(t => proxy.addTrack(t));
 
-    console.log('[ProbeX] getUserMedia intercepted: proxy stream returned');
+    console.log('[ProbeX] getUserMedia intercepted: proxy stream returned (mic=' + (realStream ? 'real' : 'none') + ')');
     return proxy;
   }
 
@@ -497,10 +504,25 @@
     } catch (e) { registered = false; }
   }
 
+  let regFailCount = 0;
   async function pushResults() {
     if (!enabled || resultBuffer.length === 0) return;
-    console.log('[ProbeX] push: buffer=%d conns=%d', resultBuffer.length, connections.size);
-    if (!registered) { await registerProbe(); if (!registered) { console.warn('[ProbeX] registration failed'); return; } }
+    if (!registered) {
+      regFailCount++;
+      // Exponential backoff: only retry registration every 2^n cycles (max 64 = ~5 min)
+      const retryEvery = Math.min(64, Math.pow(2, Math.floor(Math.log2(regFailCount))));
+      if (regFailCount % retryEvery !== 0) return;
+      await registerProbe();
+      if (!registered) {
+        if (regFailCount <= 3 || regFailCount % 60 === 0) {
+          console.warn('[ProbeX] registration failed (attempt ' + regFailCount + ', next retry in ' + retryEvery + ' cycles)');
+        }
+        // Don't let buffer grow unbounded when server is unreachable
+        if (resultBuffer.length > 50) resultBuffer = resultBuffer.slice(-20);
+        return;
+      }
+      regFailCount = 0;
+    }
 
     const batch = resultBuffer.splice(0);
     const probeResults = mergeBatch(batch);
