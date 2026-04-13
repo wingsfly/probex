@@ -511,8 +511,8 @@
       if (regFailCount % retryEvery !== 0) return;
       await registerProbe();
       if (!registered) {
-        if (regFailCount <= 3 || regFailCount % 60 === 0) {
-          console.warn('[ProbeX] registration failed (attempt ' + regFailCount + ', next retry in ' + retryEvery + ' cycles)');
+        if (regFailCount <= 1) {
+          console.debug('[ProbeX] ProbeX hub unreachable (' + hubUrl + '), will retry with backoff');
         }
         // Don't let buffer grow unbounded when server is unreachable
         if (resultBuffer.length > 50) resultBuffer = resultBuffer.slice(-20);
