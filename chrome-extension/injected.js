@@ -193,18 +193,15 @@
   let hookCheckInterval = setInterval(() => {
     try {
       if (MediaDevices.prototype.getUserMedia !== hookedGetUserMedia) {
-        console.warn('[ProbeX] getUserMedia prototype hook overwritten! Re-applying...');
         MediaDevices.prototype.getUserMedia = hookedGetUserMedia;
       }
       if (navigator.mediaDevices &&
           Object.prototype.hasOwnProperty.call(navigator.mediaDevices, 'getUserMedia') &&
           navigator.mediaDevices.getUserMedia !== hookedGetUserMedia) {
-        console.warn('[ProbeX] getUserMedia instance-level override detected! Re-applying...');
         navigator.mediaDevices.getUserMedia = hookedGetUserMedia;
       }
       // Also protect WebSocket.prototype.send hook
       if (WebSocket.prototype.send !== hookedWsSend) {
-        console.warn('[ProbeX] WebSocket.prototype.send hook overwritten! Re-applying...');
         WebSocket.prototype.send = hookedWsSend;
       }
     } catch (e) {}
