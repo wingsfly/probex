@@ -44,36 +44,38 @@ ProbeX supports three deployment modes via a single binary. **Standalone is the 
 
 ## Quick Start
 
-### Binary
+### 1. Start Backend
+
+**Binary:**
 
 ```bash
-# Build
 make build
-
-# Start backend (standalone mode, default)
-./bin/probex
-
-# API:    http://localhost:8080/api/v1
-# Health: http://localhost:8080/health
+./bin/probex                # standalone mode (default), API on :8080
 ```
 
-> Backend only provides API endpoints. To access the Web UI, you need to start the frontend separately — see [Local Development](#local-development).
-
-### Docker (Standalone)
+**Or Docker:**
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
-# API: http://localhost:8080/api/v1
 ```
 
-Or build and run directly:
+### 2. Start Frontend
 
 ```bash
-docker build -t probex .
-docker run -p 8080:8080 -v probex-data:/data probex
+cd web
+npm install
+npm run dev                 # Vite dev server on :3000
 ```
 
-> The `CMD` defaults to `standalone`. The container runs the backend API only. Start the frontend separately for the Web UI.
+### 3. Open Web UI
+
+- **Web UI: http://localhost:3000**
+- API: http://localhost:8080/api/v1
+- Health: http://localhost:8080/health
+
+> `make dev` can start both backend and frontend in one command — see [Local Development](#local-development).
+
+### Docker (Distributed: Hub + Agents)
 
 ### Docker (Distributed: Hub + Agents)
 
