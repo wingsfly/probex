@@ -888,8 +888,11 @@
               { name: 'click_to_vd_ready_ms', type: 'number', unit: 'ms', description: 'Button click → voiceDictation WS init', chartable: true },
               { name: 'audio_start_to_first_asr_ms', type: 'number', unit: 'ms', description: 'Audio send start → first word recognized', chartable: true },
               { name: 'audio_end_to_final_asr_ms', type: 'number', unit: 'ms', description: 'Audio send end → final ASR result', chartable: true },
-              { name: 'final_asr_to_tts_ms', type: 'number', unit: 'ms', description: 'Final ASR → TTS/avatar response start', chartable: true },
-              { name: 'total_interaction_ms', type: 'number', unit: 'ms', description: 'Button click → TTS response start', chartable: true },
+              { name: 'final_asr_to_tts_ms', type: 'number', unit: 'ms', description: 'Final ASR → first TTS synthesis event', chartable: true },
+              { name: 'tts_to_avatar_speak_ms', type: 'number', unit: 'ms', description: 'TTS synthesis → avatar starts speaking', chartable: true },
+              { name: 'avatar_speak_duration_ms', type: 'number', unit: 'ms', description: 'Avatar speaking duration (all segments)', chartable: true },
+              { name: 'tts_total_duration_ms', type: 'number', unit: 'ms', description: 'Total TTS audio duration (sum of segments)', chartable: true },
+              { name: 'total_interaction_ms', type: 'number', unit: 'ms', description: 'Button click → avatar finishes speaking', chartable: true },
               { name: 'cycle', type: 'number', description: 'Auto-test cycle number' },
               { name: 'page_url', type: 'string', description: 'Source page URL' },
             ],
@@ -919,10 +922,12 @@
           }],
         }),
       });
-      console.log('[ProbeX] Interaction probe pushed: ' + (metrics.success ? 'OK' : 'FAIL') +
+      console.log('[ProbeX] Interaction probe: ' + (metrics.success ? 'OK' : 'FAIL') +
         ' total=' + (metrics.total_interaction_ms || '-') + 'ms' +
         ' firstASR=' + (metrics.audio_start_to_first_asr_ms || '-') + 'ms' +
-        ' tts=' + (metrics.final_asr_to_tts_ms || '-') + 'ms');
+        ' asrToTts=' + (metrics.final_asr_to_tts_ms || '-') + 'ms' +
+        ' avatarSpeak=' + (metrics.avatar_speak_duration_ms || '-') + 'ms' +
+        ' ttsDur=' + (metrics.tts_total_duration_ms || '-') + 'ms');
     } catch (e) {}
   }
 
@@ -959,7 +964,10 @@
     let firstAsrTime = 0;
     let finalAsrText = '';
     let finalAsrTime = 0;
-    let ttsStartTime = 0;
+    let ttsStartTime = 0;       // first tts_duration event after ASR
+    let avatarSpeakStart = 0;   // first vmr_status=1 (avatar mouth starts moving)
+    let avatarSpeakEnd = 0;     // last vmr_status=2 (avatar finished all segments)
+    let ttsTotalDuration = 0;   // sum of all tts_duration values in this cycle
     let asrListener = null;
     let interactListener = null;
 
@@ -996,16 +1004,24 @@
       );
       if (!interactWs) return;
       interactListener = (ev) => {
-        if (ttsStartTime) return; // only capture first TTS event after ASR
         if (typeof ev.data !== 'string') return;
         try {
           const msg = JSON.parse(ev.data);
           const avatar = msg.payload?.avatar;
-          if (!avatar) return;
-          // tts_duration = TTS synthesis started (first reply segment)
-          // driver_status with vmr_status=0 = avatar driver started processing
-          if (avatar.event_type === 'tts_duration' && finalAsrTime) {
-            ttsStartTime = performance.now();
+          if (!avatar || !finalAsrTime) return; // only track events after ASR ends
+
+          if (avatar.event_type === 'tts_duration') {
+            // First tts_duration = TTS synthesis started for this reply
+            if (!ttsStartTime) ttsStartTime = performance.now();
+            ttsTotalDuration += (avatar.tts_duration || 0);
+          }
+          if (avatar.event_type === 'driver_status') {
+            if (avatar.vmr_status === 1 && !avatarSpeakStart) {
+              avatarSpeakStart = performance.now(); // avatar mouth starts moving
+            }
+            if (avatar.vmr_status === 2) {
+              avatarSpeakEnd = performance.now(); // update on every segment end
+            }
           }
         } catch (e) {}
       };
@@ -1061,15 +1077,25 @@
     await new Promise(r => setTimeout(r, 300));
     sendVoiceDictationEnd();
 
-    // Wait for ASR final result + TTS start (up to 15 seconds)
+    // Wait for avatar to finish speaking (vmr_status=2) or timeout
+    // Phase 1: wait for ASR + first TTS event (up to 15s)
+    // Phase 2: once TTS started, wait for avatar to finish (up to 30s more)
     await new Promise((resolve) => {
       let checks = 0;
       const check = setInterval(() => {
         checks++;
-        if ((finalAsrTime && ttsStartTime) || checks > 150) {
-          clearInterval(check);
-          resolve();
+        const elapsed = checks * 100;
+        // If no ASR response at all after 15s, give up
+        if (!finalAsrTime && elapsed > 15000) { clearInterval(check); resolve(); return; }
+        // If ASR done but no TTS after 10s, give up on TTS
+        if (finalAsrTime && !ttsStartTime && elapsed > 25000) { clearInterval(check); resolve(); return; }
+        // If TTS started, wait for avatar to finish (vmr_status=2 updates avatarSpeakEnd)
+        // Consider done when no new vmr_status=2 for 2 seconds after the last one
+        if (avatarSpeakEnd && (performance.now() - avatarSpeakEnd > 2000)) {
+          clearInterval(check); resolve(); return;
         }
+        // Hard timeout: 45 seconds total
+        if (elapsed > 45000) { clearInterval(check); resolve(); return; }
       }, 100);
     });
 
@@ -1085,7 +1111,13 @@
       audio_start_to_first_asr_ms: firstAsrTime ? Math.round(firstAsrTime - tAudioStart) : null,
       audio_end_to_final_asr_ms: finalAsrTime ? Math.round(finalAsrTime - tAudioEnd) : null,
       final_asr_to_tts_ms: (finalAsrTime && ttsStartTime) ? Math.round(ttsStartTime - finalAsrTime) : null,
-      total_interaction_ms: ttsStartTime ? Math.round(ttsStartTime - tClick) : (finalAsrTime ? Math.round(finalAsrTime - tClick) : null),
+      tts_to_avatar_speak_ms: (ttsStartTime && avatarSpeakStart) ? Math.round(avatarSpeakStart - ttsStartTime) : null,
+      avatar_speak_duration_ms: (avatarSpeakStart && avatarSpeakEnd) ? Math.round(avatarSpeakEnd - avatarSpeakStart) : null,
+      tts_total_duration_ms: ttsTotalDuration || null,
+      total_interaction_ms: avatarSpeakEnd ? Math.round(avatarSpeakEnd - tClick)
+        : ttsStartTime ? Math.round(ttsStartTime - tClick)
+        : finalAsrTime ? Math.round(finalAsrTime - tClick)
+        : null,
     };
 
     // Cleanup listeners
