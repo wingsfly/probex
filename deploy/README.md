@@ -14,6 +14,9 @@ cp deploy/.env.example deploy/.env
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
+This starts backend services on `:8080`.
+It does not start the Vite frontend dev server on `:3000`.
+
 Distributed mode:
 
 ```bash
@@ -43,3 +46,18 @@ Distributed mode:
 ```bash
 docker compose -f deploy/docker-compose.distributed.yml -f deploy/docker-compose.distributed.build.yml up -d --build
 ```
+
+## Frontend During Local Development
+
+If you want to use the web UI in local dev, run frontend separately:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Then open:
+
+- Frontend: `http://localhost:3000`
+- Backend API: `http://localhost:8080/api/v1`

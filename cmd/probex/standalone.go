@@ -133,8 +133,10 @@ func printBanner(addr, mode string) {
  |_|   |_|  \___/|_.__/ \___/_/\_\
 
   Mode: %s
-  API:  http://localhost%s/api/v1
-  Web:  http://localhost%s
+  API:        http://localhost%s/api/v1
+  Health:     http://localhost%s/health
+  Frontend:   http://localhost:3000  (run: cd web && npm run dev)
+  Note:       :8080 serves backend API only (no web page at "/")
 
 `, mode, addr, addr)
 }

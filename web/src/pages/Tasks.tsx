@@ -122,7 +122,7 @@ function TaskForm({ mode, onSuccess, onCancel }: { mode: FormMode; onSuccess: ()
   const [target, setTarget] = useState(seed?.target ?? '');
   const [probeType, setProbeType] = useState(seed?.probe_type ?? 'icmp');
   const [interval, setInterval] = useState(seed ? durationStr(seed.interval) : '30s');
-  const [timeout, setTimeout] = useState(seed ? durationStr(seed.timeout) : '10s');
+  const [timeout] = useState(seed ? durationStr(seed.timeout) : '10s');
   const [enableNow, setEnableNow] = useState(true);
   const [config, setConfig] = useState<Record<string, any>>(seedCfg as Record<string, any>);
   const [error, setError] = useState('');
