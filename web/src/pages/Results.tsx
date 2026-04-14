@@ -288,62 +288,87 @@ export default function Results() {
     return units.size === 1 ? [...units][0] : '';
   }, [chartableStdFields, hiddenLines]);
 
-  // ---- Export to Excel ----
-  const handleExport = () => {
-    const wb = XLSX.utils.book_new();
+  // ---- Export: chart PNG + data Excel ----
+  const handleExport = async () => {
+    const taskLabel = taskId ? (taskMap.get(taskId)?.name ?? taskId).replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
+    const now = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
+    const baseName = `probex-${taskLabel}-${timeRange}-${now}`;
 
-    // Sheet 1: Chart data (visible metrics over time)
-    const chartData = isMultiTask ? multiTaskChartData : singleTaskChartData;
-    const visibleKeys = chartLines.filter(l => !hiddenLines.has(l.key)).map(l => l.key);
-    const visibleNames = chartLines.filter(l => !hiddenLines.has(l.key)).map(l => l.name);
-
-    if (chartData.length > 0) {
-      const chartRows = chartData.map((row: Record<string, any>) => {
-        const out: Record<string, any> = {
-          Time: row.time ? new Date(row.time).toLocaleString() : '',
-        };
-        if (isMultiTask) {
-          // multi-task: each task is a column
-          [...taskNameColorMap.keys()].forEach(name => { out[name] = row[name] ?? ''; });
-        } else {
-          visibleKeys.forEach((key, i) => { out[visibleNames[i] || key] = row[key] ?? ''; });
-        }
-        return out;
-      });
-      const ws1 = XLSX.utils.json_to_sheet(chartRows);
-      XLSX.utils.book_append_sheet(wb, ws1, 'Chart Data');
+    // 1. Export chart as PNG
+    const svgEl = document.querySelector('.recharts-responsive-container svg') as SVGSVGElement | null;
+    if (svgEl) {
+      try {
+        const svgData = new XMLSerializer().serializeToString(svgEl);
+        const rect = svgEl.getBoundingClientRect();
+        const scale = 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = rect.width * scale;
+        canvas.height = rect.height * scale;
+        const ctx = canvas.getContext('2d')!;
+        ctx.scale(scale, scale);
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, rect.width, rect.height);
+        const img = new Image();
+        const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        await new Promise<void>((resolve) => {
+          img.onload = () => { ctx.drawImage(img, 0, 0, rect.width, rect.height); URL.revokeObjectURL(url); resolve(); };
+          img.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+          img.src = url;
+        });
+        canvas.toBlob((pngBlob) => {
+          if (!pngBlob) return;
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(pngBlob);
+          a.download = baseName + '-chart.png';
+          a.click();
+          URL.revokeObjectURL(a.href);
+        }, 'image/png');
+      } catch (e) {
+        console.warn('Chart PNG export failed:', e);
+      }
     }
 
-    // Sheet 2: Raw results table
-    const tableRows = resultsDesc.slice(0, 2000).map(r => {
+    // 2. Export data table as Excel
+    const wb = XLSX.utils.book_new();
+    const headers: string[] = ['Time'];
+    if (isMultiTask) headers.push('Task');
+    headers.push('Status');
+    presentStdFields.forEach(f => headers.push(f.label));
+    presentExtraFields.forEach(k => headers.push(k));
+    headers.push('Error');
+
+    const dataRows = resultsDesc.slice(0, 5000).map(r => {
       const extra = (r.extra ?? {}) as Record<string, any>;
-      const row: Record<string, any> = {
-        Time: new Date(r.timestamp).toLocaleString(),
-        Status: r.success ? 'OK' : 'FAIL',
-      };
-      if (isMultiTask) row.Task = taskMap.get(r.task_id)?.name ?? r.task_id;
+      const row: any[] = [new Date(r.timestamp).toLocaleString()];
+      if (isMultiTask) row.push(taskMap.get(r.task_id)?.name ?? r.task_id);
+      row.push(r.success ? 'OK' : 'FAIL');
       presentStdFields.forEach(f => {
         const v = (r as any)[f.key];
-        row[f.label] = v != null ? (f.key === 'download_bps' || f.key === 'upload_bps' ? (v / 1e6).toFixed(2) + ' Mbps' : f.fmt(v)) : '';
+        if (v == null) { row.push(''); return; }
+        if (f.key === 'download_bps' || f.key === 'upload_bps') row.push(Number((v / 1e6).toFixed(2)));
+        else if (typeof v === 'number') row.push(Number(v.toFixed(2)));
+        else row.push(v);
       });
       presentExtraFields.forEach(k => {
         const v = extra[k];
-        if (v != null) {
-          row[k] = typeof v === 'number' ? (v % 1 === 0 ? v : Number(v.toFixed(2))) : String(v);
-        } else {
-          row[k] = '';
-        }
+        if (v == null) row.push('');
+        else if (typeof v === 'number') row.push(Number(v % 1 === 0 ? v : Number(v.toFixed(2))));
+        else row.push(String(v));
       });
-      if (r.error) row.Error = r.error;
+      row.push(r.error || '');
       return row;
     });
-    const ws2 = XLSX.utils.json_to_sheet(tableRows);
-    XLSX.utils.book_append_sheet(wb, ws2, 'Results');
 
-    // Generate filename
-    const taskLabel = taskId ? (taskMap.get(taskId)?.name ?? taskId).replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
-    const now = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
-    XLSX.writeFile(wb, `probex-results-${taskLabel}-${timeRange}-${now}.xlsx`);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+    // Auto-width
+    ws['!cols'] = headers.map((h, i) => {
+      let max = h.length;
+      dataRows.slice(0, 100).forEach(row => { const v = String(row[i] ?? ''); if (v.length > max) max = v.length; });
+      return { wch: Math.min(max + 2, 40) };
+    });
+    XLSX.utils.book_append_sheet(wb, ws, 'Results');
+    XLSX.writeFile(wb, baseName + '.xlsx');
   };
 
   return (
