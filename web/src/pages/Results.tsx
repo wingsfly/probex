@@ -340,12 +340,62 @@ export default function Results() {
 
     // 2. Export data table as Excel
     const wb = XLSX.utils.book_new();
-    const headers: string[] = ['Time'];
-    if (isMultiTask) headers.push('Task');
-    headers.push('Status');
-    presentStdFields.forEach(f => headers.push(f.label));
-    presentExtraFields.forEach(k => headers.push(k));
-    headers.push('Error');
+
+    // Short display names for columns (maps raw field name → short name + description)
+    const fieldDict: Record<string, [string, string]> = {
+      // Standard fields
+      'Latency': ['Latency', 'End-to-end latency (ms)'],
+      'Jitter': ['Jitter', 'Audio RTP jitter (ms)'],
+      'Loss%': ['Loss%', 'Packet loss percentage'],
+      'Download': ['Download', 'Download bitrate (Mbps)'],
+      'Upload': ['Upload', 'Upload bitrate (Mbps)'],
+      'DNS': ['DNS', 'DNS resolution time (ms)'],
+      'TLS': ['TLS', 'TLS handshake time (ms)'],
+      // Guidex interaction extra fields
+      'success': ['OK?', 'ASR recognized speech (true/false)'],
+      'asr_text': ['ASR Text', 'Recognized text from ASR'],
+      'audio_duration_ms': ['Audio Len', 'Injected test audio duration (ms)'],
+      'click_to_vd_ready_ms': ['Click→VD', 'Button click → voiceDictation WS ready (ms)'],
+      'audio_start_to_first_asr_ms': ['1st ASR', 'Audio send start → first word recognized (ms)'],
+      'audio_end_to_final_asr_ms': ['ASR Tail', 'Audio send end → final ASR result (ms)'],
+      'audio_end_to_tts_ms': ['Wait TTS', 'User done speaking → TTS synthesis start (ms)'],
+      'tts_to_avatar_speak_ms': ['TTS→Lip', 'TTS event → avatar mouth starts (vmr=1) (ms)'],
+      'avatar_speak_duration_ms': ['Avatar Dur', 'Avatar speaking wall-clock time, all segments (ms)'],
+      'tts_total_duration_ms': ['TTS Len', 'Total TTS synthesized audio duration (ms)'],
+      'lip_move_ms': ['Lip Move', 'Total mouth-moving time, sum of vmr 0/1→2 (ms)'],
+      'lip_sync_diff_ms': ['Lip Sync', 'Client audio - lip move (ms, >0 = audio longer)'],
+      'audio_end_to_playback_ms': ['Wait Play', 'User done speaking → client hears reply (ms)'],
+      'actual_audio_duration_ms': ['Play Dur', 'Client-side actual audio playback duration (ms)'],
+      'vmr_to_actual_audio_ms': ['Srv→Play', 'Server event → client hears audio (ms)'],
+      'total_interaction_ms': ['Total', 'Full interaction: click → audio ends (ms)'],
+      'cycle': ['Cycle', 'Auto-test cycle number'],
+      'page_url': ['Page', 'Source page URL'],
+      // WebRTC extra fields
+      'audio_jitter': ['A.Jitter', 'Audio RTP interarrival jitter (ms)'],
+      'video_jitter': ['V.Jitter', 'Video RTP interarrival jitter (ms)'],
+      'video_frames_decoded': ['V.Decoded', 'Video frames decoded in interval'],
+      'video_frames_dropped': ['V.Dropped', 'Video frames dropped in interval'],
+      'video_fps': ['V.FPS', 'Video frames per second'],
+      'quality_limitation': ['Q.Limit', 'Quality limitation reason (cpu/bandwidth/none)'],
+      'available_outgoing_bitrate': ['Out BW', 'Available outgoing bitrate (bps)'],
+      'audio_jb_delay_ms': ['A.JB', 'Audio jitter buffer playout delay (ms)'],
+      'video_jb_delay_ms': ['V.JB', 'Video jitter buffer playout delay (ms)'],
+      'av_sync_diff_ms': ['AV Sync', 'Video-Audio JB delay diff (ms, >0=video lags)'],
+      'connection_count': ['Conns', 'Active PeerConnection count'],
+    };
+
+    const getShortName = (raw: string) => fieldDict[raw]?.[0] ?? raw;
+    const getDescription = (raw: string) => fieldDict[raw]?.[1] ?? '';
+
+    // Build headers with short names
+    const rawHeaders: string[] = ['Time'];
+    if (isMultiTask) rawHeaders.push('Task');
+    rawHeaders.push('Status');
+    presentStdFields.forEach(f => rawHeaders.push(f.label));
+    presentExtraFields.forEach(k => rawHeaders.push(k));
+    rawHeaders.push('Error');
+
+    const shortHeaders = rawHeaders.map(h => getShortName(h));
 
     const dataRows = resultsDesc.slice(0, 5000).map(r => {
       const extra = (r.extra ?? {}) as Record<string, any>;
@@ -369,23 +419,28 @@ export default function Results() {
       return row;
     });
 
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
-
-    // Column width: based on data content (ignore long headers since they wrap)
-    const dataWidths = headers.map((_h, i) => {
-      let max = 8; // minimum width
-      dataRows.slice(0, 200).forEach(row => {
+    // Sheet 1: Results data with short column names
+    const ws = XLSX.utils.aoa_to_sheet([shortHeaders, ...dataRows]);
+    const dataWidths = shortHeaders.map((_h: string, i: number) => {
+      let max = _h.length;
+      dataRows.slice(0, 200).forEach((row: any[]) => {
         const v = String(row[i] ?? '');
         if (v.length > max) max = v.length;
       });
       return max;
     });
-    // Use uniform width: pick a reasonable common width that fits most data
-    const medianWidth = [...dataWidths].sort((a, b) => a - b)[Math.floor(dataWidths.length / 2)] || 12;
-    const colWidth = Math.max(12, Math.min(medianWidth + 2, 22));
-    ws['!cols'] = headers.map(() => ({ wch: colWidth }));
-
+    ws['!cols'] = dataWidths.map((w: number) => ({ wch: Math.max(8, Math.min(w + 2, 24)) }));
     XLSX.utils.book_append_sheet(wb, ws, 'Results');
+
+    // Sheet 2: Dictionary — explains each column
+    const dictRows = [['Column', 'Field Name', 'Description']];
+    rawHeaders.forEach((raw, i) => {
+      dictRows.push([shortHeaders[i], raw, getDescription(raw) || raw]);
+    });
+    const wsDict = XLSX.utils.aoa_to_sheet(dictRows);
+    wsDict['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, wsDict, 'Dictionary');
+
     XLSX.writeFile(wb, baseName + '.xlsx');
   };
 
