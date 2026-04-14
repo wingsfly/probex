@@ -5,7 +5,7 @@ import type { ProbeResult, Task } from '../types/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
-import * as XLSX from 'sheetjs-style';
+// sheetjs-style is loaded dynamically on export to avoid blocking page render
 
 const TASK_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 const EXTRA_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#78716c', '#9333ea'];
@@ -290,6 +290,7 @@ export default function Results() {
 
   // ---- Export: chart PNG + data Excel ----
   const handleExport = async () => {
+    const XLSX = await import('sheetjs-style');
     const taskLabel = taskId ? (taskMap.get(taskId)?.name ?? taskId).replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
     const now = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
     const baseName = `probex-${taskLabel}-${timeRange}-${now}`;
