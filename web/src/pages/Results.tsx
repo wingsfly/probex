@@ -292,16 +292,11 @@ export default function Results() {
   const handleExport = async () => {
     let XLSX: any;
     try {
-      const mod = await import('sheetjs-style');
+      const mod = await import('xlsx');
       XLSX = mod.default || mod;
     } catch (e) {
-      console.error('Failed to load sheetjs-style:', e);
-      alert('Export module failed to load. Check console for details.');
-      return;
-    }
-    if (!XLSX?.utils) {
-      console.error('XLSX module loaded but utils not found:', Object.keys(XLSX));
-      alert('Export module structure unexpected. Check console.');
+      console.error('Failed to load xlsx:', e);
+      alert('Export module failed to load.');
       return;
     }
     const taskLabel = taskId ? (taskMap.get(taskId)?.name ?? taskId).replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
@@ -389,25 +384,6 @@ export default function Results() {
     const medianWidth = [...dataWidths].sort((a, b) => a - b)[Math.floor(dataWidths.length / 2)] || 12;
     const colWidth = Math.max(12, Math.min(medianWidth + 2, 22));
     ws['!cols'] = headers.map(() => ({ wch: colWidth }));
-
-    // Header row: wrap text + bold style
-    const headerRowIdx = 0;
-    headers.forEach((_h, c) => {
-      const cellRef = XLSX.utils.encode_cell({ r: headerRowIdx, c });
-      if (ws[cellRef]) {
-        ws[cellRef].s = {
-          alignment: { wrapText: true, vertical: 'center', horizontal: 'center' },
-          font: { bold: true, sz: 10 },
-          fill: { patternType: 'solid', fgColor: { rgb: 'F3F4F6' } },
-          border: {
-            bottom: { style: 'thin', color: { rgb: 'D1D5DB' } },
-          },
-        };
-      }
-    });
-    // Set header row height to accommodate wrapped text
-    if (!ws['!rows']) ws['!rows'] = [];
-    ws['!rows'][headerRowIdx] = { hpt: 40 }; // ~2.5 lines
 
     XLSX.utils.book_append_sheet(wb, ws, 'Results');
     XLSX.writeFile(wb, baseName + '.xlsx');
