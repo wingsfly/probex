@@ -361,12 +361,37 @@ export default function Results() {
     });
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
-    // Auto-width
-    ws['!cols'] = headers.map((h, i) => {
-      let max = h.length;
-      dataRows.slice(0, 100).forEach(row => { const v = String(row[i] ?? ''); if (v.length > max) max = v.length; });
-      return { wch: Math.min(max + 2, 40) };
+
+    // Column width: based on data content (ignore long headers since they wrap)
+    const dataWidths = headers.map((_h, i) => {
+      let max = 8; // minimum width
+      dataRows.slice(0, 200).forEach(row => {
+        const v = String(row[i] ?? '');
+        if (v.length > max) max = v.length;
+      });
+      return max;
     });
+    // Use uniform width: pick a reasonable common width that fits most data
+    const medianWidth = [...dataWidths].sort((a, b) => a - b)[Math.floor(dataWidths.length / 2)] || 12;
+    const colWidth = Math.max(12, Math.min(medianWidth + 2, 22));
+    ws['!cols'] = headers.map(() => ({ wch: colWidth }));
+
+    // Header row: wrap text + bold style
+    const headerRowIdx = 0;
+    headers.forEach((_h, c) => {
+      const cellRef = XLSX.utils.encode_cell({ r: headerRowIdx, c });
+      if (ws[cellRef]) {
+        ws[cellRef].s = {
+          alignment: { wrapText: true, vertical: 'center', horizontal: 'center' },
+          font: { bold: true },
+          fill: { fgColor: { rgb: 'F3F4F6' } },
+        };
+      }
+    });
+    // Set header row height to accommodate wrapped text
+    if (!ws['!rows']) ws['!rows'] = [];
+    ws['!rows'][headerRowIdx] = { hpt: 40 }; // ~2.5 lines
+
     XLSX.utils.book_append_sheet(wb, ws, 'Results');
     XLSX.writeFile(wb, baseName + '.xlsx');
   };
