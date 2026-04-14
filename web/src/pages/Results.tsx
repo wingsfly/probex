@@ -290,7 +290,20 @@ export default function Results() {
 
   // ---- Export: chart PNG + data Excel ----
   const handleExport = async () => {
-    const XLSX = await import('sheetjs-style');
+    let XLSX: any;
+    try {
+      const mod = await import('sheetjs-style');
+      XLSX = mod.default || mod;
+    } catch (e) {
+      console.error('Failed to load sheetjs-style:', e);
+      alert('Export module failed to load. Check console for details.');
+      return;
+    }
+    if (!XLSX?.utils) {
+      console.error('XLSX module loaded but utils not found:', Object.keys(XLSX));
+      alert('Export module structure unexpected. Check console.');
+      return;
+    }
     const taskLabel = taskId ? (taskMap.get(taskId)?.name ?? taskId).replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
     const now = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
     const baseName = `probex-${taskLabel}-${timeRange}-${now}`;
