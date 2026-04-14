@@ -988,22 +988,26 @@
     }
 
     // Listen for TTS/avatar response on the interact WS
+    // iFlytek interact protocol: event_type "tts_duration" signals TTS start,
+    // event_type "driver_status" with vmr_status=1 signals avatar starts speaking
     function setupTtsListener() {
       const interactWs = window.__probexWsList.find(ws =>
-        ws.url?.includes('avatar-api-gp.xf-yun.com/v1/interact') && ws.readyState === WebSocket.OPEN
+        ws.url?.includes('/v1/interact') && ws.readyState === WebSocket.OPEN
       );
       if (!interactWs) return;
       interactListener = (ev) => {
-        if (ttsStartTime) return; // only capture first TTS event
-        if (typeof ev.data === 'string') {
-          try {
-            const msg = JSON.parse(ev.data);
-            // Detect TTS/answer response (varies by SDK, look for text/audio indicators)
-            if (msg.data?.text || msg.data?.audio || msg.type === 'answer' || msg.data?.sub === 'tts') {
-              ttsStartTime = performance.now();
-            }
-          } catch (e) {}
-        }
+        if (ttsStartTime) return; // only capture first TTS event after ASR
+        if (typeof ev.data !== 'string') return;
+        try {
+          const msg = JSON.parse(ev.data);
+          const avatar = msg.payload?.avatar;
+          if (!avatar) return;
+          // tts_duration = TTS synthesis started (first reply segment)
+          // driver_status with vmr_status=0 = avatar driver started processing
+          if (avatar.event_type === 'tts_duration' && finalAsrTime) {
+            ttsStartTime = performance.now();
+          }
+        } catch (e) {}
       };
       interactWs.addEventListener('message', interactListener);
     }
