@@ -1,39 +1,42 @@
 # ProbeX Distributed — Hub + 2 Agents for E2E testing
 services:
   hub:
-    build: ..
+    image: ${PROBEX_IMAGE:-ghcr.io/hjma/probex:latest}
+    pull_policy: always
     ports:
       - "8080:8080"
     volumes:
       - hub-data:/data
     environment:
-      - PROBEX_HUB_TOKEN=test-token-123
-    command: ["hub", "--token", "test-token-123"]
+      - PROBEX_HUB_TOKEN=${PROBEX_HUB_TOKEN:-test-token-123}
+    command: ["hub", "--token", "${PROBEX_HUB_TOKEN:-test-token-123}"]
     restart: unless-stopped
 
   agent-east:
-    build: ..
+    image: ${PROBEX_IMAGE:-ghcr.io/hjma/probex:latest}
+    pull_policy: always
     network_mode: host
     depends_on:
       - hub
     command: >
       agent
-      --hub ws://localhost:8080/api/v1/ws/agent
-      --token test-token-123
-      --name agent-east
+      --hub ${PROBEX_HUB_WS_URL:-ws://localhost:8080/api/v1/ws/agent}
+      --token ${PROBEX_HUB_TOKEN:-test-token-123}
+      --name ${PROBEX_AGENT_EAST_NAME:-agent-east}
       --labels {"region":"us-east","isp":"aws"}
     restart: unless-stopped
 
   agent-west:
-    build: ..
+    image: ${PROBEX_IMAGE:-ghcr.io/hjma/probex:latest}
+    pull_policy: always
     network_mode: host
     depends_on:
       - hub
     command: >
       agent
-      --hub ws://localhost:8080/api/v1/ws/agent
-      --token test-token-123
-      --name agent-west
+      --hub ${PROBEX_HUB_WS_URL:-ws://localhost:8080/api/v1/ws/agent}
+      --token ${PROBEX_HUB_TOKEN:-test-token-123}
+      --name ${PROBEX_AGENT_WEST_NAME:-agent-west}
       --labels {"region":"us-west","isp":"gcp"}
     restart: unless-stopped
 
