@@ -246,46 +246,38 @@
 
       // Split into chunks (~40ms each, matching typical ASR frame size)
       const chunkSamples = Math.floor(targetRate * 0.04); // 640 samples per 40ms
-      const chunkBytes = chunkSamples * 2; // 16-bit = 2 bytes per sample
       const totalChunks = Math.ceil(pcm16.length / chunkSamples);
-      const sendInterval = 40; // send one chunk every 40ms (real-time)
 
-      console.log('[ProbeX] Sending test audio via WS: ' + audioBuffer.duration.toFixed(1) + 's, ' + totalChunks + ' chunks @ 40ms');
+      console.log('[ProbeX] Sending test audio via WS: ' + audioBuffer.duration.toFixed(1) + 's, ' + totalChunks + ' chunks');
 
-      let chunkIdx = 0;
       const ws = voiceDictationWs;
       const origSendRef = OrigWebSocket.prototype.send.bind(ws);
 
-      const timer = setInterval(() => {
-        if (chunkIdx >= totalChunks || ws.readyState !== WebSocket.OPEN) {
-          clearInterval(timer);
-          console.log('[ProbeX] Test audio send complete (' + chunkIdx + ' chunks sent)');
-          resolve();
-          return;
-        }
+      // Send all chunks immediately in a burst. ASR accepts data faster than real-time.
+      // This avoids setInterval being throttled to 1s/tick when the tab is hidden
+      // (e.g. remote desktop disconnected), which would cause ASR to timeout.
+      let sent = 0;
+      for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+        if (ws.readyState !== WebSocket.OPEN) break;
 
         const start = chunkIdx * chunkSamples;
         const end = Math.min(start + chunkSamples, pcm16.length);
         const chunk = pcm16.slice(start, end);
 
-        // Convert to base64
         const bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
         let binary = '';
         for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
         const b64 = btoa(binary);
 
-        // Send as the SDK would
-        const msg = JSON.stringify({ status: 1, message: b64 });
         try {
-          origSendRef(msg);
+          origSendRef(JSON.stringify({ status: 1, message: b64 }));
+          sent++;
         } catch (e) {
           console.error('[ProbeX] WS send error:', e.message);
-          clearInterval(timer);
-          resolve();
-          return;
+          break;
         }
-        chunkIdx++;
-      }, sendInterval);
+      }
+      console.log('[ProbeX] Test audio send complete (' + sent + '/' + totalChunks + ' chunks)');
     });
   }
 
