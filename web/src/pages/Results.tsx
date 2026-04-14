@@ -24,6 +24,8 @@ const STANDARD_FIELDS: { key: keyof ProbeResult; label: string; unit: string; fm
 export default function Results() {
   const [taskId, setTaskId] = useState('');
   const [timeRange, setTimeRange] = useState('1h');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [hiddenLines, setHiddenLines] = useState<Set<string>>(new Set());
 
   const toggleLine = (dataKey: string) => {
@@ -34,22 +36,32 @@ export default function Results() {
     });
   };
 
+  const isCustom = timeRange === 'custom';
+
   const fromTime = () => {
+    if (isCustom && customFrom) return new Date(customFrom).toISOString();
     const now = new Date();
     const hours: Record<string, number> = { '1h': 1, '6h': 6, '24h': 24, '7d': 168 };
     now.setHours(now.getHours() - (hours[timeRange] ?? 1));
     return now.toISOString();
   };
 
+  const toTime = () => {
+    if (isCustom && customTo) return new Date(customTo).toISOString();
+    return '';
+  };
+
   // Scale limit by time range; larger ranges pull more data
-  const limitByRange: Record<string, string> = { '1h': '2000', '6h': '5000', '24h': '15000', '7d': '50000' };
+  const limitByRange: Record<string, string> = { '1h': '2000', '6h': '5000', '24h': '15000', '7d': '50000', 'custom': '10000' };
   // Larger ranges: slower refresh (no point refreshing 7d data every 10s)
-  const refreshByRange: Record<string, number | false> = { '1h': 10000, '6h': 30000, '24h': 60000, '7d': false };
+  const refreshByRange: Record<string, number | false> = { '1h': 10000, '6h': 30000, '24h': 60000, '7d': false, 'custom': false };
   const params = new URLSearchParams({ limit: limitByRange[timeRange] ?? '2000', from: fromTime() });
+  const to = toTime();
+  if (to) params.set('to', to);
   if (taskId) params.set('task_id', taskId);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['results', taskId, timeRange],
+    queryKey: ['results', taskId, timeRange, customFrom, customTo],
     queryFn: () => api.getResults(params.toString()),
     refetchInterval: refreshByRange[timeRange] ?? 10000,
   });
@@ -299,7 +311,21 @@ export default function Results() {
           <option value="6h">Last 6 hours</option>
           <option value="24h">Last 24 hours</option>
           <option value="7d">Last 7 days</option>
+          <option value="custom">Custom range</option>
         </select>
+        {isCustom && (
+          <>
+            <input type="datetime-local" value={customFrom}
+              onChange={e => setCustomFrom(e.target.value)}
+              style={{ ...selectStyle, fontSize: '0.8rem' }}
+              title="From" />
+            <span style={{ color: '#6b7280', fontSize: '0.875rem' }}>to</span>
+            <input type="datetime-local" value={customTo}
+              onChange={e => setCustomTo(e.target.value)}
+              style={{ ...selectStyle, fontSize: '0.8rem' }}
+              title="To" />
+          </>
+        )}
         {taskId && (
           <button onClick={handleClear} disabled={clearMutation.isPending}
             style={{ padding: '0.5rem 0.75rem', border: '1px solid #fca5a5', borderRadius: 6, background: '#fff',
