@@ -30,7 +30,7 @@ const FIELD_DICT: Record<string, [string, string]> = {
   'lip_sync_diff_ms': ['Lip Sync', '唇形同步偏差(ms)。计算: actual_audio_duration_ms - lip_move_ms。正值=客户端听到的声音比嘴动的时间长（嘴停后音频仍在缓冲播放）'],
   'audio_end_to_playback_ms': ['Wait Play', '说完话到听到回复(ms)。计算: actualAudioStart - tAudioEnd。actualAudioStart = AnalyserNode检测到RMS能量>阈值的时刻，仅在finalAsrTime设置后才开始检测'],
   'actual_audio_duration_ms': ['Play Dur', '客户端实际听到声音的时长(ms)。计算: actualAudioEnd - actualAudioStart。通过AnalyserNode每50ms轮询RMS能量，阈值=10，检测有声→无声的时间差'],
-  'vmr_to_actual_audio_ms': ['Lip→Play', '嘴巴开始动到客户端听到声音(ms)。计算: actualAudioStart - firstVmr1Time。反映WebRTC推流 + jitter buffer + 音频解码的传输延迟'],
+  'vmr_to_actual_audio_ms': ['Lip→Play', '音画同步差(ms)。计算: actualAudioStart - firstVmr1Time。负值=声音先于嘴唇动(音频超前)，正值=嘴唇先动(视频超前)。反映数字人音视频同步状态'],
   'total_interaction_ms': ['Total', '端到端总耗时(ms)。计算: 终点 - tClick。终点优先级: actualAudioEnd(客户端声音停止) > avatarSpeakEnd(数字人说完) > ttsStartTime(TTS开始) > finalAsrTime(ASR结束)'],
   'cycle': ['Cycle', '自动测试轮次序号'],
   'page_url': ['Page', '测试页面URL (location.href)'],
