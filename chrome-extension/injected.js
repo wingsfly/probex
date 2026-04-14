@@ -529,6 +529,9 @@
               { name: 'video_fps', type: 'number', unit: 'fps', chartable: true },
               { name: 'quality_limitation', type: 'string', description: 'cpu/bandwidth/none' },
               { name: 'available_outgoing_bitrate', type: 'number', unit: 'bps', chartable: true },
+              { name: 'audio_jb_delay_ms', type: 'number', unit: 'ms', description: 'Audio jitter buffer playout delay', chartable: true },
+              { name: 'video_jb_delay_ms', type: 'number', unit: 'ms', description: 'Video jitter buffer playout delay', chartable: true },
+              { name: 'av_sync_diff_ms', type: 'number', unit: 'ms', description: 'Video-Audio jitter buffer delay diff (>0 = video lags)', chartable: true },
               { name: 'page_url', type: 'string', description: 'Source page URL' },
               { name: 'connection_count', type: 'number', description: 'Active PeerConnection count' },
             ],
@@ -616,6 +619,13 @@
         }
         if (!result.extra.available_outgoing_bitrate && r.availableOutgoingBitrate != null)
           result.extra.available_outgoing_bitrate = r.availableOutgoingBitrate;
+        // Jitter buffer delay (first-wins)
+        if (result.extra.audio_jb_delay_ms == null && r.audioJbDelayMs != null)
+          result.extra.audio_jb_delay_ms = Math.round(r.audioJbDelayMs * 100) / 100;
+        if (result.extra.video_jb_delay_ms == null && r.videoJbDelayMs != null)
+          result.extra.video_jb_delay_ms = Math.round(r.videoJbDelayMs * 100) / 100;
+        if (result.extra.av_sync_diff_ms == null && r.avSyncDiffMs != null)
+          result.extra.av_sync_diff_ms = r.avSyncDiffMs;
         if (r.packetLossPct != null && r.packetLossPct > worstLoss) worstLoss = r.packetLossPct;
         if (r.downloadBps != null) { totalDown += r.downloadBps; hasDown = true; }
         if (r.uploadBps != null) { totalUp += r.uploadBps; hasUp = true; }
@@ -675,6 +685,26 @@
     for (const r of inboundAudio) { if (r.jitter != null) { now.audioJitter = r.jitter * 1000; break; } }
     // Video jitter
     for (const r of inboundVideo) { if (r.jitter != null) { now.videoJitter = r.jitter * 1000; break; } }
+
+    // Jitter buffer delay (for audio/video sync analysis)
+    // jitterBufferDelay / jitterBufferEmittedCount = average playout delay in seconds
+    let audioJbDelay = null, videoJbDelay = null;
+    for (const r of inboundAudio) {
+      if (r.jitterBufferDelay != null && r.jitterBufferEmittedCount > 0) {
+        audioJbDelay = (r.jitterBufferDelay / r.jitterBufferEmittedCount) * 1000; // ms
+        break;
+      }
+    }
+    for (const r of inboundVideo) {
+      if (r.jitterBufferDelay != null && r.jitterBufferEmittedCount > 0) {
+        videoJbDelay = (r.jitterBufferDelay / r.jitterBufferEmittedCount) * 1000; // ms
+        break;
+      }
+    }
+    now.audioJbDelayMs = audioJbDelay;
+    now.videoJbDelayMs = videoJbDelay;
+    // Positive = video delayed more than audio (lip-sync: mouth lags behind voice)
+    now.avSyncDiffMs = (audioJbDelay != null && videoJbDelay != null) ? Math.round(videoJbDelay - audioJbDelay) : null;
 
     // Packet loss
     let totalLostDelta = 0, totalRecvDelta = 0;
@@ -912,10 +942,12 @@
               { name: 'click_to_vd_ready_ms', type: 'number', unit: 'ms', description: 'Button click → voiceDictation WS init', chartable: true },
               { name: 'audio_start_to_first_asr_ms', type: 'number', unit: 'ms', description: 'Audio send start → first word recognized', chartable: true },
               { name: 'audio_end_to_final_asr_ms', type: 'number', unit: 'ms', description: 'Audio send end → final ASR result', chartable: true },
-              { name: 'final_asr_to_tts_ms', type: 'number', unit: 'ms', description: 'Final ASR → first TTS synthesis event', chartable: true },
+              { name: 'audio_end_to_tts_ms', type: 'number', unit: 'ms', description: 'User done speaking → first TTS synthesis event', chartable: true },
               { name: 'tts_to_avatar_speak_ms', type: 'number', unit: 'ms', description: 'TTS synthesis → avatar starts speaking', chartable: true },
               { name: 'avatar_speak_duration_ms', type: 'number', unit: 'ms', description: 'Avatar speaking duration (all segments)', chartable: true },
               { name: 'tts_total_duration_ms', type: 'number', unit: 'ms', description: 'Total TTS audio duration (sum of segments)', chartable: true },
+              { name: 'lip_move_ms', type: 'number', unit: 'ms', description: 'Total mouth-moving time (sum of vmr_status 1→2)', chartable: true },
+              { name: 'lip_sync_diff_ms', type: 'number', unit: 'ms', description: 'TTS audio duration minus lip-move time (>0 = mouth moves less than audio)', chartable: true },
               { name: 'total_interaction_ms', type: 'number', unit: 'ms', description: 'Button click → avatar finishes speaking', chartable: true },
               { name: 'cycle', type: 'number', description: 'Auto-test cycle number' },
               { name: 'page_url', type: 'string', description: 'Source page URL' },
@@ -949,9 +981,11 @@
       console.log('[ProbeX] Interaction probe: ' + (metrics.success ? 'OK' : 'FAIL') +
         ' total=' + (metrics.total_interaction_ms || '-') + 'ms' +
         ' firstASR=' + (metrics.audio_start_to_first_asr_ms || '-') + 'ms' +
-        ' asrToTts=' + (metrics.final_asr_to_tts_ms || '-') + 'ms' +
+        ' speakToTts=' + (metrics.audio_end_to_tts_ms || '-') + 'ms' +
         ' avatarSpeak=' + (metrics.avatar_speak_duration_ms || '-') + 'ms' +
-        ' ttsDur=' + (metrics.tts_total_duration_ms || '-') + 'ms');
+        ' lipMove=' + (metrics.lip_move_ms || '-') + 'ms' +
+        ' ttsDur=' + (metrics.tts_total_duration_ms || '-') + 'ms' +
+        ' lipSync=' + (metrics.lip_sync_diff_ms != null ? metrics.lip_sync_diff_ms : '-') + 'ms');
     } catch (e) {}
   }
 
@@ -992,6 +1026,8 @@
     let avatarSpeakStart = 0;   // first vmr_status=1 (avatar mouth starts moving)
     let avatarSpeakEnd = 0;     // last vmr_status=2 (avatar finished all segments)
     let ttsTotalDuration = 0;   // sum of all tts_duration values in this cycle
+    let lipMoveMs = 0;          // total time mouth is moving (sum of vmr_status 1→2 segments)
+    let lastLipStart = 0;       // timestamp of most recent vmr_status=1
     let asrListener = null;
     let interactListener = null;
 
@@ -1040,11 +1076,13 @@
             ttsTotalDuration += (avatar.tts_duration || 0);
           }
           if (avatar.event_type === 'driver_status') {
-            if (avatar.vmr_status === 1 && !avatarSpeakStart) {
-              avatarSpeakStart = performance.now(); // avatar mouth starts moving
+            if (avatar.vmr_status === 1) {
+              if (!avatarSpeakStart) avatarSpeakStart = performance.now();
+              lastLipStart = performance.now(); // each segment mouth-open
             }
             if (avatar.vmr_status === 2) {
-              avatarSpeakEnd = performance.now(); // update on every segment end
+              avatarSpeakEnd = performance.now();
+              if (lastLipStart) { lipMoveMs += (avatarSpeakEnd - lastLipStart); lastLipStart = 0; }
             }
           }
         } catch (e) {}
@@ -1134,10 +1172,12 @@
       click_to_vd_ready_ms: Math.round(tVdReady - tClick),
       audio_start_to_first_asr_ms: firstAsrTime ? Math.round(firstAsrTime - tAudioStart) : null,
       audio_end_to_final_asr_ms: finalAsrTime ? Math.round(finalAsrTime - tAudioEnd) : null,
-      final_asr_to_tts_ms: (finalAsrTime && ttsStartTime) ? Math.round(ttsStartTime - finalAsrTime) : null,
+      audio_end_to_tts_ms: ttsStartTime ? Math.round(ttsStartTime - tAudioEnd) : null,
       tts_to_avatar_speak_ms: (ttsStartTime && avatarSpeakStart) ? Math.round(avatarSpeakStart - ttsStartTime) : null,
       avatar_speak_duration_ms: (avatarSpeakStart && avatarSpeakEnd) ? Math.round(avatarSpeakEnd - avatarSpeakStart) : null,
       tts_total_duration_ms: ttsTotalDuration || null,
+      lip_move_ms: lipMoveMs ? Math.round(lipMoveMs) : null,
+      lip_sync_diff_ms: (ttsTotalDuration && lipMoveMs) ? Math.round(ttsTotalDuration - lipMoveMs) : null,
       total_interaction_ms: avatarSpeakEnd ? Math.round(avatarSpeakEnd - tClick)
         : ttsStartTime ? Math.round(ttsStartTime - tClick)
         : finalAsrTime ? Math.round(finalAsrTime - tClick)
