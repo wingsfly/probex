@@ -687,24 +687,44 @@
     for (const r of inboundVideo) { if (r.jitter != null) { now.videoJitter = r.jitter * 1000; break; } }
 
     // Jitter buffer delay (for audio/video sync analysis)
-    // jitterBufferDelay / jitterBufferEmittedCount = average playout delay in seconds
+    // Use INCREMENTAL calculation for instantaneous delay (not cumulative average)
     let audioJbDelay = null, videoJbDelay = null;
     for (const r of inboundAudio) {
       if (r.jitterBufferDelay != null && r.jitterBufferEmittedCount > 0) {
-        audioJbDelay = (r.jitterBufferDelay / r.jitterBufferEmittedCount) * 1000; // ms
+        if (prevMap) {
+          const prev = prevMap.get(r.id);
+          if (prev && prev.jitterBufferEmittedCount != null) {
+            const dDelay = r.jitterBufferDelay - (prev.jitterBufferDelay || 0);
+            const dCount = r.jitterBufferEmittedCount - (prev.jitterBufferEmittedCount || 0);
+            if (dCount > 0) audioJbDelay = (dDelay / dCount) * 1000; // ms, instantaneous
+          }
+        }
+        if (audioJbDelay == null) {
+          audioJbDelay = (r.jitterBufferDelay / r.jitterBufferEmittedCount) * 1000; // fallback: cumulative
+        }
         break;
       }
     }
     for (const r of inboundVideo) {
       if (r.jitterBufferDelay != null && r.jitterBufferEmittedCount > 0) {
-        videoJbDelay = (r.jitterBufferDelay / r.jitterBufferEmittedCount) * 1000; // ms
+        if (prevMap) {
+          const prev = prevMap.get(r.id);
+          if (prev && prev.jitterBufferEmittedCount != null) {
+            const dDelay = r.jitterBufferDelay - (prev.jitterBufferDelay || 0);
+            const dCount = r.jitterBufferEmittedCount - (prev.jitterBufferEmittedCount || 0);
+            if (dCount > 0) videoJbDelay = (dDelay / dCount) * 1000;
+          }
+        }
+        if (videoJbDelay == null) {
+          videoJbDelay = (r.jitterBufferDelay / r.jitterBufferEmittedCount) * 1000;
+        }
         break;
       }
     }
-    now.audioJbDelayMs = audioJbDelay;
-    now.videoJbDelayMs = videoJbDelay;
-    // Positive = video delayed more than audio (lip-sync: mouth lags behind voice)
-    now.avSyncDiffMs = (audioJbDelay != null && videoJbDelay != null) ? Math.round(videoJbDelay - audioJbDelay) : null;
+    now.audioJbDelayMs = audioJbDelay != null ? Math.round(audioJbDelay * 100) / 100 : null;
+    now.videoJbDelayMs = videoJbDelay != null ? Math.round(videoJbDelay * 100) / 100 : null;
+    // Instantaneous A/V sync: positive = video delayed more (mouth lags behind voice)
+    now.avSyncDiffMs = (audioJbDelay != null && videoJbDelay != null) ? Math.round((videoJbDelay - audioJbDelay) * 100) / 100 : null;
 
     // Packet loss
     let totalLostDelta = 0, totalRecvDelta = 0;
@@ -948,6 +968,10 @@
               { name: 'tts_total_duration_ms', type: 'number', unit: 'ms', description: 'Total TTS audio duration (sum of segments)', chartable: true },
               { name: 'lip_move_ms', type: 'number', unit: 'ms', description: 'Total mouth-moving time (sum of vmr_status 1→2)', chartable: true },
               { name: 'lip_sync_diff_ms', type: 'number', unit: 'ms', description: 'TTS audio duration minus lip-move time (>0 = mouth moves less than audio)', chartable: true },
+              { name: 'actual_audio_start_ms', type: 'number', unit: 'ms', description: 'Client actually hears audio (from click)', chartable: true },
+              { name: 'actual_audio_end_ms', type: 'number', unit: 'ms', description: 'Client audio goes silent (from click)', chartable: true },
+              { name: 'actual_audio_duration_ms', type: 'number', unit: 'ms', description: 'Actual client-side audio playback duration', chartable: true },
+              { name: 'vmr_to_actual_audio_ms', type: 'number', unit: 'ms', description: 'vmr_status=1 → client hears audio (server-client delay)', chartable: true },
               { name: 'total_interaction_ms', type: 'number', unit: 'ms', description: 'Button click → avatar finishes speaking', chartable: true },
               { name: 'cycle', type: 'number', description: 'Auto-test cycle number' },
               { name: 'page_url', type: 'string', description: 'Source page URL' },
@@ -984,8 +1008,9 @@
         ' speakToTts=' + (metrics.audio_end_to_tts_ms || '-') + 'ms' +
         ' avatarSpeak=' + (metrics.avatar_speak_duration_ms || '-') + 'ms' +
         ' lipMove=' + (metrics.lip_move_ms || '-') + 'ms' +
+        ' actualAudio=' + (metrics.actual_audio_duration_ms || '-') + 'ms' +
         ' ttsDur=' + (metrics.tts_total_duration_ms || '-') + 'ms' +
-        ' lipSync=' + (metrics.lip_sync_diff_ms != null ? metrics.lip_sync_diff_ms : '-') + 'ms');
+        ' vmrToAudio=' + (metrics.vmr_to_actual_audio_ms != null ? metrics.vmr_to_actual_audio_ms : '-') + 'ms');
     } catch (e) {}
   }
 
@@ -1030,8 +1055,71 @@
     let lastLipStart = 0;       // timestamp of most recent vmr_status=1
     let ttsSegmentCount = 0;    // number of tts_duration events received
     let lipSegmentCount = 0;    // number of vmr_status=2 events (completed lip segments)
+    let actualAudioStart = 0;   // client-side: first moment audio energy detected
+    let actualAudioEnd = 0;     // client-side: last moment audio energy dropped to silence
+    let audioEnergyMonitor = null; // cleanup handle for energy detection
     let asrListener = null;
     let interactListener = null;
+
+    // ---- Client-side audio playback detection via AnalyserNode ----
+    // Taps into the WebRTC audio receiver track to detect when sound actually plays.
+    function setupAudioEnergyDetector() {
+      // Find the audio receiver track from active PeerConnections
+      let audioTrack = null;
+      for (const [, entry] of connections) {
+        const pc = entry.pc;
+        if (!pc.getReceivers) continue;
+        for (const recv of pc.getReceivers()) {
+          if (recv.track?.kind === 'audio' && recv.track.readyState === 'live') {
+            audioTrack = recv.track;
+            break;
+          }
+        }
+        if (audioTrack) break;
+      }
+      if (!audioTrack) { console.debug('[ProbeX] No live audio receiver track for energy detection'); return; }
+
+      try {
+        const detectCtx = new AudioContext();
+        const source = detectCtx.createMediaStreamSource(new MediaStream([audioTrack]));
+        const analyser = detectCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.3;
+        source.connect(analyser);
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const SILENCE_THRESHOLD = 10; // RMS energy threshold (0-255 scale)
+        let wasPlaying = false;
+
+        const pollInterval = setInterval(() => {
+          analyser.getByteFrequencyData(dataArray);
+          // Calculate RMS energy
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) sum += dataArray[i] * dataArray[i];
+          const rms = Math.sqrt(sum / dataArray.length);
+
+          const isPlaying = rms > SILENCE_THRESHOLD;
+          if (isPlaying && !wasPlaying) {
+            // Silence → Sound transition
+            if (!actualAudioStart && finalAsrTime) { // only after ASR (ignore pre-existing audio)
+              actualAudioStart = performance.now();
+            }
+            wasPlaying = true;
+          } else if (!isPlaying && wasPlaying) {
+            // Sound → Silence transition
+            actualAudioEnd = performance.now();
+            wasPlaying = false;
+          }
+        }, 50); // 50ms polling = 20Hz, very lightweight
+
+        audioEnergyMonitor = () => {
+          clearInterval(pollInterval);
+          source.disconnect();
+          detectCtx.close().catch(() => {});
+        };
+      } catch (e) {
+        console.debug('[ProbeX] Audio energy detector setup failed:', e.message);
+      }
+    }
 
     // Listen for ASR responses on the voiceDictation WS
     function setupAsrListener(ws) {
@@ -1129,6 +1217,7 @@
     // Setup listeners before sending audio
     setupAsrListener(voiceDictationWs);
     setupTtsListener();
+    setupAudioEnergyDetector();
 
     await new Promise(r => setTimeout(r, 800));
 
@@ -1181,18 +1270,24 @@
       tts_total_duration_ms: ttsTotalDuration || null,
       lip_move_ms: lipMoveMs ? Math.round(lipMoveMs) : null,
       lip_sync_diff_ms: (ttsTotalDuration && lipMoveMs) ? Math.round(ttsTotalDuration - lipMoveMs) : null,
-      total_interaction_ms: avatarSpeakEnd ? Math.round(avatarSpeakEnd - tClick)
+      actual_audio_start_ms: actualAudioStart ? Math.round(actualAudioStart - tClick) : null,
+      actual_audio_end_ms: actualAudioEnd ? Math.round(actualAudioEnd - tClick) : null,
+      actual_audio_duration_ms: (actualAudioStart && actualAudioEnd) ? Math.round(actualAudioEnd - actualAudioStart) : null,
+      vmr_to_actual_audio_ms: (avatarSpeakStart && actualAudioStart) ? Math.round(actualAudioStart - avatarSpeakStart) : null,
+      total_interaction_ms: actualAudioEnd ? Math.round(actualAudioEnd - tClick)
+        : avatarSpeakEnd ? Math.round(avatarSpeakEnd - tClick)
         : ttsStartTime ? Math.round(ttsStartTime - tClick)
         : finalAsrTime ? Math.round(finalAsrTime - tClick)
         : null,
     };
 
-    // Cleanup listeners
+    // Cleanup listeners and audio detector
     if (asrListener && voiceDictationWs) voiceDictationWs.removeEventListener('message', asrListener);
     if (interactListener) {
-      const iws = window.__probexWsList.find(ws => ws.url?.includes('avatar-api-gp.xf-yun.com/v1/interact'));
+      const iws = window.__probexWsList.find(ws => ws.url?.includes('/v1/interact'));
       if (iws) iws.removeEventListener('message', interactListener);
     }
+    if (audioEnergyMonitor) audioEnergyMonitor();
 
     // Push to ProbeX
     await pushInteractionResult(metrics);
