@@ -5,6 +5,7 @@ import type { ProbeResult, Task } from '../types/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
+import * as XLSX from 'xlsx';
 
 const TASK_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 const EXTRA_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#78716c', '#9333ea'];
@@ -287,6 +288,64 @@ export default function Results() {
     return units.size === 1 ? [...units][0] : '';
   }, [chartableStdFields, hiddenLines]);
 
+  // ---- Export to Excel ----
+  const handleExport = () => {
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Chart data (visible metrics over time)
+    const chartData = isMultiTask ? multiTaskChartData : singleTaskChartData;
+    const visibleKeys = chartLines.filter(l => !hiddenLines.has(l.key)).map(l => l.key);
+    const visibleNames = chartLines.filter(l => !hiddenLines.has(l.key)).map(l => l.name);
+
+    if (chartData.length > 0) {
+      const chartRows = chartData.map((row: Record<string, any>) => {
+        const out: Record<string, any> = {
+          Time: row.time ? new Date(row.time).toLocaleString() : '',
+        };
+        if (isMultiTask) {
+          // multi-task: each task is a column
+          [...taskNameColorMap.keys()].forEach(name => { out[name] = row[name] ?? ''; });
+        } else {
+          visibleKeys.forEach((key, i) => { out[visibleNames[i] || key] = row[key] ?? ''; });
+        }
+        return out;
+      });
+      const ws1 = XLSX.utils.json_to_sheet(chartRows);
+      XLSX.utils.book_append_sheet(wb, ws1, 'Chart Data');
+    }
+
+    // Sheet 2: Raw results table
+    const tableRows = resultsDesc.slice(0, 2000).map(r => {
+      const extra = (r.extra ?? {}) as Record<string, any>;
+      const row: Record<string, any> = {
+        Time: new Date(r.timestamp).toLocaleString(),
+        Status: r.success ? 'OK' : 'FAIL',
+      };
+      if (isMultiTask) row.Task = taskMap.get(r.task_id)?.name ?? r.task_id;
+      presentStdFields.forEach(f => {
+        const v = (r as any)[f.key];
+        row[f.label] = v != null ? (f.key === 'download_bps' || f.key === 'upload_bps' ? (v / 1e6).toFixed(2) + ' Mbps' : f.fmt(v)) : '';
+      });
+      presentExtraFields.forEach(k => {
+        const v = extra[k];
+        if (v != null) {
+          row[k] = typeof v === 'number' ? (v % 1 === 0 ? v : Number(v.toFixed(2))) : String(v);
+        } else {
+          row[k] = '';
+        }
+      });
+      if (r.error) row.Error = r.error;
+      return row;
+    });
+    const ws2 = XLSX.utils.json_to_sheet(tableRows);
+    XLSX.utils.book_append_sheet(wb, ws2, 'Results');
+
+    // Generate filename
+    const taskLabel = taskId ? (taskMap.get(taskId)?.name ?? taskId).replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
+    const now = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
+    XLSX.writeFile(wb, `probex-results-${taskLabel}-${timeRange}-${now}.xlsx`);
+  };
+
   return (
     <div>
       <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1rem' }}>Results</h1>
@@ -357,6 +416,9 @@ export default function Results() {
                       return next;
                     });
                   }} style={legendBtnStyle} title="Invert selection">Invert</button>
+                  <button onClick={handleExport}
+                    style={{ ...legendBtnStyle, background: '#059669', color: '#fff', border: 'none' }}
+                    title="Export chart & table to Excel">Export</button>
                 </div>
               </div>
               <ResponsiveContainer width="100%" height={300}>
