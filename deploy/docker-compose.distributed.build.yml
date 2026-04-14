@@ -1,0 +1,12 @@
+# Optional override for local distributed image build.
+# Usage:
+#   docker compose -f deploy/docker-compose.distributed.yml -f deploy/docker-compose.distributed.build.yml up -d --build
+services:
+  hub:
+    build: ..
+
+  agent-east:
+    build: ..
+
+  agent-west:
+    build: ..

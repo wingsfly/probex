@@ -1,7 +1,8 @@
 # ProbeX Standalone — single-node monitoring
 services:
   probex:
-    build: ..
+    image: ${PROBEX_IMAGE:-ghcr.io/hjma/probex:latest}
+    pull_policy: always
     ports:
       - "8080:8080"
     volumes:

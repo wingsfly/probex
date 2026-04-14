@@ -1,0 +1,6 @@
+# Optional override for local standalone image build.
+# Usage:
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.standalone.build.yml up -d --build
+services:
+  probex:
+    build: ..
