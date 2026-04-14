@@ -1028,6 +1028,8 @@
     let ttsTotalDuration = 0;   // sum of all tts_duration values in this cycle
     let lipMoveMs = 0;          // total time mouth is moving (sum of vmr_status 1→2 segments)
     let lastLipStart = 0;       // timestamp of most recent vmr_status=1
+    let ttsSegmentCount = 0;    // number of tts_duration events received
+    let lipSegmentCount = 0;    // number of vmr_status=2 events (completed lip segments)
     let asrListener = null;
     let interactListener = null;
 
@@ -1071,17 +1073,18 @@
           if (!avatar || !finalAsrTime) return; // only track events after ASR ends
 
           if (avatar.event_type === 'tts_duration') {
-            // First tts_duration = TTS synthesis started for this reply
             if (!ttsStartTime) ttsStartTime = performance.now();
             ttsTotalDuration += (avatar.tts_duration || 0);
+            ttsSegmentCount++;
           }
           if (avatar.event_type === 'driver_status') {
             if (avatar.vmr_status === 1) {
               if (!avatarSpeakStart) avatarSpeakStart = performance.now();
-              lastLipStart = performance.now(); // each segment mouth-open
+              lastLipStart = performance.now();
             }
             if (avatar.vmr_status === 2) {
               avatarSpeakEnd = performance.now();
+              lipSegmentCount++;
               if (lastLipStart) { lipMoveMs += (avatarSpeakEnd - lastLipStart); lastLipStart = 0; }
             }
           }
@@ -1139,25 +1142,23 @@
     await new Promise(r => setTimeout(r, 300));
     sendVoiceDictationEnd();
 
-    // Wait for avatar to finish speaking (vmr_status=2) or timeout
-    // Phase 1: wait for ASR + first TTS event (up to 15s)
-    // Phase 2: once TTS started, wait for avatar to finish (up to 30s more)
+    // Wait for avatar to finish ALL TTS segments or timeout.
+    // Done condition: lipSegmentCount >= ttsSegmentCount (each TTS segment has a matching vmr_status:2)
     await new Promise((resolve) => {
       let checks = 0;
       const check = setInterval(() => {
         checks++;
         const elapsed = checks * 100;
-        // If no ASR response at all after 15s, give up
+        // Phase 1: no ASR after 15s → give up
         if (!finalAsrTime && elapsed > 15000) { clearInterval(check); resolve(); return; }
-        // If ASR done but no TTS after 10s, give up on TTS
+        // Phase 2: ASR done but no TTS after 10s → give up on TTS
         if (finalAsrTime && !ttsStartTime && elapsed > 25000) { clearInterval(check); resolve(); return; }
-        // If TTS started, wait for avatar to finish (vmr_status=2 updates avatarSpeakEnd)
-        // Consider done when no new vmr_status=2 for 2 seconds after the last one
-        if (avatarSpeakEnd && (performance.now() - avatarSpeakEnd > 2000)) {
+        // Phase 3: all TTS segments have completed (vmr_status:2 count matches tts_duration count)
+        if (ttsSegmentCount > 0 && lipSegmentCount >= ttsSegmentCount) {
           clearInterval(check); resolve(); return;
         }
-        // Hard timeout: 45 seconds total
-        if (elapsed > 45000) { clearInterval(check); resolve(); return; }
+        // Hard timeout: 60 seconds total (long TTS can be 10-15s per segment)
+        if (elapsed > 60000) { clearInterval(check); resolve(); return; }
       }, 100);
     });
 
