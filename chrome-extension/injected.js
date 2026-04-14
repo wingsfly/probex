@@ -247,37 +247,69 @@
       // Split into chunks (~40ms each, matching typical ASR frame size)
       const chunkSamples = Math.floor(targetRate * 0.04); // 640 samples per 40ms
       const totalChunks = Math.ceil(pcm16.length / chunkSamples);
+      const sendInterval = 40;
 
-      console.log('[ProbeX] Sending test audio via WS: ' + audioBuffer.duration.toFixed(1) + 's, ' + totalChunks + ' chunks');
+      console.log('[ProbeX] Sending test audio via WS: ' + audioBuffer.duration.toFixed(1) + 's, ' + totalChunks + ' chunks @ ' + sendInterval + 'ms');
 
       const ws = voiceDictationWs;
       const origSendRef = OrigWebSocket.prototype.send.bind(ws);
 
-      // Send all chunks immediately in a burst. ASR accepts data faster than real-time.
-      // This avoids setInterval being throttled to 1s/tick when the tab is hidden
-      // (e.g. remote desktop disconnected), which would cause ASR to timeout.
-      let sent = 0;
-      for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
-        if (ws.readyState !== WebSocket.OPEN) break;
-
-        const start = chunkIdx * chunkSamples;
+      // Pre-encode all chunks to base64 strings
+      const encodedChunks = [];
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunkSamples;
         const end = Math.min(start + chunkSamples, pcm16.length);
         const chunk = pcm16.slice(start, end);
-
         const bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
         let binary = '';
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        const b64 = btoa(binary);
-
-        try {
-          origSendRef(JSON.stringify({ status: 1, message: b64 }));
-          sent++;
-        } catch (e) {
-          console.error('[ProbeX] WS send error:', e.message);
-          break;
-        }
+        for (let j = 0; j < bytes.length; j++) binary += String.fromCharCode(bytes[j]);
+        encodedChunks.push(btoa(binary));
       }
-      console.log('[ProbeX] Test audio send complete (' + sent + '/' + totalChunks + ' chunks)');
+
+      // Use a Web Worker for accurate timing even when tab is hidden.
+      // Worker timers are NOT throttled by Chrome's background tab policy.
+      const workerCode = `
+        let idx = 0, total = 0, interval = 40;
+        self.onmessage = (e) => {
+          total = e.data.total;
+          interval = e.data.interval;
+          tick();
+        };
+        function tick() {
+          if (idx >= total) { self.postMessage({ done: true, sent: idx }); return; }
+          self.postMessage({ idx: idx });
+          idx++;
+          setTimeout(tick, interval);
+        }
+      `;
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      const worker = new Worker(URL.createObjectURL(blob));
+
+      worker.onmessage = (e) => {
+        if (e.data.done) {
+          worker.terminate();
+          URL.revokeObjectURL(blob);
+          console.log('[ProbeX] Test audio send complete (' + e.data.sent + '/' + totalChunks + ' chunks)');
+          resolve();
+          return;
+        }
+        const idx = e.data.idx;
+        if (ws.readyState !== WebSocket.OPEN) {
+          worker.terminate();
+          console.warn('[ProbeX] WS closed during send at chunk ' + idx);
+          resolve();
+          return;
+        }
+        try {
+          origSendRef(JSON.stringify({ status: 1, message: encodedChunks[idx] }));
+        } catch (err) {
+          console.error('[ProbeX] WS send error:', err.message);
+          worker.terminate();
+          resolve();
+        }
+      };
+
+      worker.postMessage({ total: totalChunks, interval: sendInterval });
     });
   }
 
