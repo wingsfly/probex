@@ -5,6 +5,50 @@ import type { ProbeResult, Task } from '../types/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
+// Short display names for columns (maps raw field name → [short name, description])
+const FIELD_DICT: Record<string, [string, string]> = {
+  // Standard WebRTC fields
+  'Latency': ['Latency', 'End-to-end RTT. Source: remote-inbound-rtp.roundTripTime × 1000, fallback candidate-pair.currentRoundTripTime × 1000'],
+  'Jitter': ['Jitter', 'Audio RTP interarrival jitter. Source: inbound-rtp(audio).jitter × 1000'],
+  'Loss%': ['Loss%', 'Packet loss rate. Calc: (packetsLost delta) / (packetsReceived + packetsLost delta) × 100'],
+  'Download': ['Download', 'Download bitrate (Mbps). Calc: inbound-rtp bytesReceived delta × 8 / time delta'],
+  'Upload': ['Upload', 'Upload bitrate (Mbps). Calc: outbound-rtp bytesSent delta × 8 / time delta'],
+  'DNS': ['DNS', 'DNS resolution time (ms)'],
+  'TLS': ['TLS', 'TLS handshake time (ms)'],
+  // Guidex interaction probe fields
+  'success': ['OK?', 'Whether ASR recognized speech. Calc: true if any VD WS recv has non-empty word (code:0, ws[].cw[].w != "")'],
+  'asr_text': ['ASR Text', 'Recognized text. Source: VD WS recv code:0 messages, ws[].cw[].w concatenated. Priority: final ASR (status:2, ls:true) > first ASR'],
+  'audio_duration_ms': ['Audio Len', 'Test audio file duration. Source: audioBuffer.duration × 1000 (fixed per test file)'],
+  'click_to_vd_ready_ms': ['Click→VD', 'Button click to VD session ready. Calc: tVdReady - tClick. tVdReady = new voiceDictation WS created + status:0 sent'],
+  'audio_start_to_first_asr_ms': ['1st ASR', 'First byte to first word. Calc: firstAsrTime - tAudioStart. firstAsrTime = first VD recv with non-empty word'],
+  'audio_end_to_final_asr_ms': ['ASR Tail', 'Audio end to final ASR. Calc: finalAsrTime - tAudioEnd. finalAsrTime = VD recv with status:2 + ls:true'],
+  'audio_end_to_tts_ms': ['Wait TTS', 'User done speaking to TTS start. Calc: ttsStartTime - tAudioEnd. ttsStartTime = first interact WS tts_duration event after finalAsrTime set'],
+  'tts_to_avatar_speak_ms': ['TTS→Lip', 'TTS event to mouth open. Calc: firstVmr1Time - ttsStartTime. firstVmr1Time = first interact WS vmr_status=1'],
+  'avatar_speak_duration_ms': ['Avatar Dur', 'Wall-clock speaking time. Calc: avatarSpeakEnd - avatarSpeakStart. Start = first vmr=0/1, End = last vmr=2. Includes inter-segment gaps'],
+  'tts_total_duration_ms': ['TTS Len', 'TTS synthesis length. Calc: sum of all interact WS tts_duration values. Note: raw synthesis time, ~1.5x actual playback speed'],
+  'lip_move_ms': ['Lip Move', 'Mouth moving time. Calc: sum of per-segment (vmr=2 time - first vmr=0/1 time). Excludes inter-segment gaps. Compare with Avatar Dur for gap time'],
+  'lip_sync_diff_ms': ['Lip Sync', 'Audio-lip sync gap. Calc: actual_audio_duration_ms - lip_move_ms. >0 = client audio plays longer than mouth moves'],
+  'audio_end_to_playback_ms': ['Wait Play', 'User done to hearing reply. Calc: actualAudioStart - tAudioEnd. actualAudioStart = AnalyserNode RMS > threshold, only after finalAsrTime set'],
+  'actual_audio_duration_ms': ['Play Dur', 'Client audio playback time. Calc: actualAudioEnd - actualAudioStart. AnalyserNode 50ms polling, RMS threshold=10'],
+  'vmr_to_actual_audio_ms': ['Lip→Play', 'Mouth starts to client hears. Calc: actualAudioStart - firstVmr1Time. Measures WebRTC transport + jitter buffer + decode delay'],
+  'total_interaction_ms': ['Total', 'End-to-end time. Calc: endpoint - tClick. Endpoint priority: actualAudioEnd > avatarSpeakEnd > ttsStartTime > finalAsrTime'],
+  'cycle': ['Cycle', 'Auto-test cycle sequence number'],
+  'page_url': ['Page', 'Source page URL (location.href)'],
+  // WebRTC continuous monitoring fields
+  'audio_jitter': ['A.Jitter', 'Audio RTP jitter. Source: inbound-rtp(audio).jitter × 1000'],
+  'video_jitter': ['V.Jitter', 'Video RTP jitter. Source: inbound-rtp(video).jitter × 1000'],
+  'video_frames_decoded': ['V.Decoded', 'Video frames decoded. Calc: inbound-rtp(video).framesDecoded delta between samples'],
+  'video_frames_dropped': ['V.Dropped', 'Video frames dropped. Calc: inbound-rtp(video).framesDropped delta between samples'],
+  'video_fps': ['V.FPS', 'Video frame rate. Source: inbound-rtp(video).framesPerSecond'],
+  'quality_limitation': ['Q.Limit', 'Encoding quality limit. Source: outbound-rtp(video).qualityLimitationReason (cpu/bandwidth/none)'],
+  'available_outgoing_bitrate': ['Out BW', 'Available upload bandwidth. Source: candidate-pair.availableOutgoingBitrate'],
+  'audio_jb_delay_ms': ['A.JB', 'Audio jitter buffer delay. Calc: incremental (jitterBufferDelay delta / emittedCount delta) × 1000. 500ms sub-sample, 2s aggregated'],
+  'video_jb_delay_ms': ['V.JB', 'Video jitter buffer delay. Calc: same as A.JB but for video inbound-rtp'],
+  'av_sync_diff_ms': ['AV Sync', 'A/V sync drift. Calc: latest video JB - latest audio JB (cross-PC aggregation). >0 = video lags behind audio'],
+  'connection_count': ['Conns', 'Active PeerConnection count'],
+};
+const getShortName = (raw: string) => FIELD_DICT[raw]?.[0] ?? raw;
+
 // sheetjs-style is loaded dynamically on export to avoid blocking page render
 
 const TASK_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
@@ -252,7 +296,7 @@ export default function Results() {
     numericExtraFields.forEach(k => {
       // available_outgoing_bitrate is bps-scale, everything else is small-scale
       const yAxisId = k === 'available_outgoing_bitrate' ? 'bps' : 'default';
-      lines.push({ key: `extra:${k}`, name: k, color: EXTRA_COLORS[ci++ % EXTRA_COLORS.length], yAxisId });
+      lines.push({ key: `extra:${k}`, name: getShortName(k), color: EXTRA_COLORS[ci++ % EXTRA_COLORS.length], yAxisId });
     });
     return lines;
   }, [chartableStdFields, presentExtraFields]);
@@ -341,51 +385,7 @@ export default function Results() {
     // 2. Export data table as Excel
     const wb = XLSX.utils.book_new();
 
-    // Short display names for columns (maps raw field name → short name + description)
-    const fieldDict: Record<string, [string, string]> = {
-      // Standard fields
-      'Latency': ['Latency', 'End-to-end latency (ms)'],
-      'Jitter': ['Jitter', 'Audio RTP jitter (ms)'],
-      'Loss%': ['Loss%', 'Packet loss percentage'],
-      'Download': ['Download', 'Download bitrate (Mbps)'],
-      'Upload': ['Upload', 'Upload bitrate (Mbps)'],
-      'DNS': ['DNS', 'DNS resolution time (ms)'],
-      'TLS': ['TLS', 'TLS handshake time (ms)'],
-      // Guidex interaction extra fields
-      'success': ['OK?', 'ASR recognized speech (true/false)'],
-      'asr_text': ['ASR Text', 'Recognized text from ASR'],
-      'audio_duration_ms': ['Audio Len', 'Injected test audio duration (ms)'],
-      'click_to_vd_ready_ms': ['Click→VD', 'Button click → voiceDictation WS ready (ms)'],
-      'audio_start_to_first_asr_ms': ['1st ASR', 'Audio send start → first word recognized (ms)'],
-      'audio_end_to_final_asr_ms': ['ASR Tail', 'Audio send end → final ASR result (ms)'],
-      'audio_end_to_tts_ms': ['Wait TTS', 'User done speaking → TTS synthesis start (ms)'],
-      'tts_to_avatar_speak_ms': ['TTS→Lip', 'TTS event → avatar mouth starts (vmr=1) (ms)'],
-      'avatar_speak_duration_ms': ['Avatar Dur', 'Wall-clock from first vmr=0 to last vmr=2 (includes inter-segment gaps) (ms)'],
-      'tts_total_duration_ms': ['TTS Len', 'Total TTS synthesized audio length (raw, ~1.5x actual playback speed) (ms)'],
-      'lip_move_ms': ['Lip Move', 'Sum of each segment vmr=0/1→2 (excludes inter-segment gaps) (ms). Compare with Avatar Dur to see gap time'],
-      'lip_sync_diff_ms': ['Lip Sync', 'Client audio - lip move (ms, >0 = audio longer)'],
-      'audio_end_to_playback_ms': ['Wait Play', 'User done speaking → client hears reply (ms)'],
-      'actual_audio_duration_ms': ['Play Dur', 'Client-side actual audio playback duration (ms)'],
-      'vmr_to_actual_audio_ms': ['Srv→Play', 'Server event → client hears audio (ms)'],
-      'total_interaction_ms': ['Total', 'Full interaction: click → audio ends (ms)'],
-      'cycle': ['Cycle', 'Auto-test cycle number'],
-      'page_url': ['Page', 'Source page URL'],
-      // WebRTC extra fields
-      'audio_jitter': ['A.Jitter', 'Audio RTP interarrival jitter (ms)'],
-      'video_jitter': ['V.Jitter', 'Video RTP interarrival jitter (ms)'],
-      'video_frames_decoded': ['V.Decoded', 'Video frames decoded in interval'],
-      'video_frames_dropped': ['V.Dropped', 'Video frames dropped in interval'],
-      'video_fps': ['V.FPS', 'Video frames per second'],
-      'quality_limitation': ['Q.Limit', 'Quality limitation reason (cpu/bandwidth/none)'],
-      'available_outgoing_bitrate': ['Out BW', 'Available outgoing bitrate (bps)'],
-      'audio_jb_delay_ms': ['A.JB', 'Audio jitter buffer playout delay (ms)'],
-      'video_jb_delay_ms': ['V.JB', 'Video jitter buffer playout delay (ms)'],
-      'av_sync_diff_ms': ['AV Sync', 'Video-Audio JB delay diff (ms, >0=video lags)'],
-      'connection_count': ['Conns', 'Active PeerConnection count'],
-    };
-
-    const getShortName = (raw: string) => fieldDict[raw]?.[0] ?? raw;
-    const getDescription = (raw: string) => fieldDict[raw]?.[1] ?? '';
+    const getDescription = (raw: string) => FIELD_DICT[raw]?.[1] ?? '';
 
     // Build headers with short names
     const rawHeaders: string[] = ['Time'];
@@ -576,7 +576,7 @@ export default function Results() {
                   {isMultiTask && <th style={thStyle}>Task</th>}
                   <th style={thStyle}>Status</th>
                   {presentStdFields.map(f => <th key={f.key} style={thStyle}>{f.label}</th>)}
-                  {presentExtraFields.map(k => <th key={k} style={{ ...thStyle, fontSize: '0.75rem' }}>{k}</th>)}
+                  {presentExtraFields.map(k => <th key={k} style={{ ...thStyle, fontSize: '0.75rem' }} title={k}>{getShortName(k)}</th>)}
                   <th style={thStyle}>Error</th>
                 </tr>
               </thead>
