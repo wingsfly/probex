@@ -32,63 +32,96 @@ Distributed network quality monitoring platform. Deploy probes across your infra
                                             └──────────────────┘
 ```
 
+## Deployment Modes
+
+ProbeX supports three deployment modes via a single binary. **Standalone is the default** — running `probex` without arguments is equivalent to `probex standalone`.
+
+| Mode | Command | Description |
+|------|---------|-------------|
+| **Standalone** | `probex` or `probex standalone` | Single-node, runs both hub and local agent. Suitable for most scenarios. |
+| **Hub** | `probex hub` | Central controller only. Accepts remote agent connections, no local probing. |
+| **Agent** | `probex agent` | Remote probe node. Connects to a hub, executes probes locally. |
+
 ## Quick Start
 
-### One Command (Local Development)
+### Binary
+
+```bash
+# Build
+make build
+
+# Run in standalone mode (default)
+./bin/probex
+
+# Web UI: http://localhost:8080
+# API:    http://localhost:8080/api/v1
+# Health: http://localhost:8080/health
+```
+
+### Docker (Standalone)
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+# Web UI: http://localhost:8080
+```
+
+Or build and run directly:
+
+```bash
+docker build -t probex .
+docker run -p 8080:8080 -v probex-data:/data probex
+```
+
+> The `CMD` defaults to `standalone`. No subcommand needed.
+
+### Docker (Distributed: Hub + Agents)
+
+```bash
+docker compose -f deploy/docker-compose.distributed.yml up -d
+```
+
+This starts a hub + 2 agents (east/west). Configure via environment variables in `deploy/.env`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROBEX_HUB_TOKEN` | `test-token-123` | Shared auth token between hub and agents |
+| `PROBEX_AGENT_EAST_NAME` | `agent-east` | Agent name / region label |
+| `PROBEX_AGENT_WEST_NAME` | `agent-west` | Agent name / region label |
+
+### Hub + Agent (Binary)
+
+```bash
+# Start hub on central server
+./bin/probex hub --token my-secret-token
+
+# Start agent(s) on remote machines
+./bin/probex agent --hub ws://hub-host:8080/api/v1/ws/agent --token my-secret-token --name agent-bj --labels '{"region":"beijing"}'
+```
+
+## Local Development
+
+### One Command
 
 ```bash
 make dev
 ```
 
-This starts backend and frontend together.
+Starts backend (`:8080`) + Vite frontend (`:3000`) together. `Ctrl+C` stops both.
 
 ### Step by Step
 
-1. Start backend API (`:8080`):
-
 ```bash
+# Terminal 1: backend
 make dev-backend
-```
 
-2. Start frontend UI (`:3000`) in another terminal:
-
-```bash
+# Terminal 2: frontend
 make web-install
 make dev-frontend
 ```
 
-3. Open the UI: `http://localhost:3000`
+Open `http://localhost:3000` for the dev UI.
 
-4. Backend endpoints:
-   - API: `http://localhost:8080/api/v1`
-   - Health: `http://localhost:8080/health`
-
-> Note: `http://localhost:8080` is backend-only and returns 404 at `/`. The frontend is served by Vite on `:3000` during local dev.
-
-### Hub + Agent Mode
-
-```bash
-# Start hub
-./bin/probex hub --config configs/controller.yaml
-
-# Start agent(s) on remote machines
-./bin/probex agent --config configs/agent.yaml
-```
-
-### Docker
-
-```bash
-cp deploy/.env.example deploy/.env
-docker compose -f deploy/docker-compose.yml up -d
-```
-
-If you need the web UI while using Docker backend, still run:
-
-```bash
-cd web
-npm install
-npm run dev
-```
+> Note: In dev mode, `http://localhost:8080` is the backend API only (returns 404 at `/`). The frontend is served by Vite on `:3000`.
 
 ## Configuration
 
