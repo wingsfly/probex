@@ -1080,7 +1080,9 @@
           if (avatar.event_type === 'driver_status') {
             if (avatar.vmr_status === 1) {
               if (!avatarSpeakStart) avatarSpeakStart = performance.now();
-              lastLipStart = performance.now();
+              // Only set lastLipStart on the FIRST vmr=1 of each segment.
+              // vmr=1 can fire multiple times within a segment (progress updates).
+              if (!lastLipStart) lastLipStart = performance.now();
             }
             if (avatar.vmr_status === 2) {
               avatarSpeakEnd = performance.now();
