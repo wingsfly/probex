@@ -119,6 +119,19 @@
         }
       });
     }
+
+    // Monitor interact WS for TTS/avatar response events
+    if (url.includes('/v1/interact')) {
+      console.log('[ProbeX] interact WebSocket detected!');
+      let interactMsgCount = 0;
+      ws.addEventListener('message', (ev) => {
+        interactMsgCount++;
+        if (typeof ev.data === 'string' && interactMsgCount <= 20) {
+          console.log('[ProbeX][INTERACT] recv #' + interactMsgCount + ': ' + ev.data.slice(0, 400));
+        }
+      });
+    }
+
     return ws;
   };
   window.WebSocket.prototype = OrigWebSocket.prototype;
