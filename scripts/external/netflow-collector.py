@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-External Network Interface Traffic Monitor for ProbeX.
+External Network Interface Flow Monitor for ProbeX.
 
-Monitors real-time network interface throughput by sampling OS byte counters.
-NOT a speed test — this measures actual traffic flowing through the NIC.
+Monitors real-time network interface traffic (rx/tx) by sampling OS byte counters.
+Measures actual traffic flowing through the NIC, NOT maximum bandwidth (speed test).
 
 Requires: pip install psutil
 
 Usage:
-    python3 netspeed-collector.py [options]
+    python3 netflow-collector.py [options]
 
 Options:
     --controller URL    ProbeX server (default: http://localhost:8080)
     --interval SEC      Sampling interval in seconds (default: 5)
     --iface NAME        Network interface to monitor (default: auto-detect)
-    --id TEMPLATE       Instance ID template. Probe registers as "netspeed-{id}".
+    --id TEMPLATE       Instance ID template. Probe registers as "netflow-{id}".
                         Placeholders:
                           %h  short hostname (lowercase, stripped .local)
                           %H  full hostname (original)
@@ -22,26 +22,26 @@ Options:
                           %iN last N octets joined by dash (%i2 → 70-101)
                           %f  interface name
                           %o  OS name (lowercase)
-                        Default: "%h-%f" → e.g. "netspeed-mac-mini-en0"
+                        Default: "%h-%f" → e.g. "netflow-mac-mini-en0"
 
 Examples:
-    # Default: netspeed-mac-mini-en0
-    python3 netspeed-collector.py
+    # Default: netflow-mac-mini-en0
+    python3 netflow-collector.py
 
-    # Last 2 IP octets: netspeed-70-101
-    python3 netspeed-collector.py --id %i2
+    # Last 2 IP octets: netflow-70-101
+    python3 netflow-collector.py --id %i2
 
-    # Hostname + last octet: netspeed-mac-mini-101
-    python3 netspeed-collector.py --id "%h-%i1"
+    # Hostname + last octet: netflow-mac-mini-101
+    python3 netflow-collector.py --id "%h-%i1"
 
-    # Full IP: netspeed-192-168-70-101
-    python3 netspeed-collector.py --id %i
+    # Full IP: netflow-192-168-70-101
+    python3 netflow-collector.py --id %i
 
-    # Static label: netspeed-office-gw
-    python3 netspeed-collector.py --id office-gw
+    # Static label: netflow-office-gw
+    python3 netflow-collector.py --id office-gw
 
     # Remote hub
-    python3 netspeed-collector.py --controller http://192.168.1.100:8080 --iface eth0
+    python3 netflow-collector.py --controller http://192.168.1.100:8080 --iface eth0
 """
 
 import argparse
@@ -162,7 +162,7 @@ def get_host_info(iface: str) -> dict:
 def register_probe(base: str, probe_name: str, host_info: dict) -> bool:
     payload = {
         "name": probe_name,
-        "description": f"NIC traffic monitor on {host_info['hostname']} ({host_info['ip']}, {host_info['interface']})",
+        "description": f"NIC flow monitor on {host_info['hostname']} ({host_info['ip']}, {host_info['interface']})",
         "parameter_schema": {
             "type": "object",
             "properties": {
@@ -214,9 +214,9 @@ def push(base: str, probe_name: str, agent_id: str, node_id: str, result: dict) 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ProbeX NIC Traffic Monitor",
+        description="ProbeX NIC Flow Monitor",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Each instance registers as a separate probe (netspeed-{id}) in ProbeX.\n"
+        epilog="Each instance registers as a separate probe (netflow-{id}) in ProbeX.\n"
                "Placeholders: %h=hostname %i=IP %iN=last-N-octets %f=iface %o=OS %H=full-host",
     )
     parser.add_argument("--controller", default="http://localhost:8080",
@@ -236,12 +236,12 @@ def main():
 
     # Expand template placeholders in instance ID
     instance_id = expand_template(args.id, host_info, iface)
-    probe_name = f"netspeed-{instance_id}"
+    probe_name = f"netflow-{instance_id}"
     agent_id = f"{probe_name}@{short_hostname()}"
     node_id = get_node_id()
     base = f"{args.controller}/api/v1"
 
-    print(f"NIC Traffic Monitor", flush=True)
+    print(f"NIC Flow Monitor", flush=True)
     print(f"  Probe:      {probe_name}", flush=True)
     print(f"  Agent:      {agent_id}", flush=True)
     print(f"  Node ID:    {node_id}", flush=True)
