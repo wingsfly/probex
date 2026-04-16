@@ -77,8 +77,6 @@ npm run dev                 # Vite dev server on :3000
 
 ### Docker (Distributed: Hub + Agents)
 
-### Docker (Distributed: Hub + Agents)
-
 ```bash
 docker compose -f deploy/docker-compose.distributed.yml up -d
 ```
@@ -157,21 +155,54 @@ The web UI (`web/`) is built with React + TypeScript and provides:
 
 ## External Probe Integration
 
-ProbeX accepts push-based metrics from external probes (e.g. the [WebRTC Chrome Extension](https://github.com/wingsfly/probex-webrtc-guidex-extension)):
+ProbeX accepts push-based metrics from external probes via REST API. No authentication required.
+
+### API Endpoints
 
 ```
-POST /api/v1/external/probe
-Content-Type: application/json
+# Register a probe
+POST /api/v1/probes/register
+{ "name": "netflow-office-gw", "description": "..." }
 
-{
-  "probe_id": "webrtc-ext-001",
-  "task_id": "...",
-  "metrics": { ... }
-}
+# Push results
+POST /api/v1/probes/netflow-office-gw/push
+{ "agent_id": "...", "node_id": "a3f0b12c", "results": [{ "success": true, ... }] }
 ```
+
+### Node ID
+
+Every ProbeX node generates a persistent 8-char hex ID stored in `~/.probex/node_id`. This enables the server to correlate results from the same physical machine even when user-chosen probe names collide across hosts.
+
+### Built-in External Scripts
+
+#### netflow-collector — NIC Flow Monitor
+
+Monitors real-time network interface traffic (rx/tx throughput), NOT maximum bandwidth.
+
+```bash
+pip3 install psutil
+
+# Local — auto-detect interface, 5s interval
+python3 scripts/external/netflow-collector.py
+
+# Remote hub, custom ID template
+python3 scripts/external/netflow-collector.py \
+  --controller http://192.168.70.101:8080 --id %i2
+
+# Manual ID + specific interface + 3s interval
+python3 scripts/external/netflow-collector.py \
+  --controller http://192.168.70.101:8080 --id office-gw --iface eth0 --interval 3
+```
+
+ID template placeholders: `%h`=hostname, `%i`=IP, `%iN`=last N IP octets, `%f`=interface, `%o`=OS.
+
+#### WebRTC Chrome Extension
+
+See [probex-webrtc-guidex-extension](https://github.com/wingsfly/probex-webrtc-guidex-extension) for WebRTC quality monitoring and Guidex digital human interaction testing.
 
 ## Tech Stack
 
 - **Backend**: Go, Chi router, SQLite, gRPC, Cobra CLI
 - **Frontend**: React, TypeScript, Recharts, xlsx
-- **Extension**: Chrome MV3, WebRTC getStats API, WebSocket hooks
+- **External Scripts**: Python (psutil), persistent node ID
+- **Chrome Extension**: MV3, WebRTC getStats API, WebSocket hooks
