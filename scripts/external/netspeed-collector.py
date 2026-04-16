@@ -14,16 +14,23 @@ Options:
     --controller URL    ProbeX server (default: http://localhost:8080)
     --interval SEC      Sampling interval in seconds (default: 5)
     --iface NAME        Network interface to monitor (default: auto-detect)
-    --id ID             Instance ID for this collector. Determines the probe name
-                        registered in ProbeX as "netspeed-{id}".
-                        Default: auto-generated as "{hostname}-{iface}"
+    --id ID             Instance ID template. Probe registers as "netspeed-{id}".
+                        Supports placeholders: %h=hostname, %i=IP, %f=interface,
+                        %o=OS-name, %H=full-hostname (with .local etc.)
+                        Default: "%h-%f" → e.g. "netspeed-mac-mini-en0"
 
 Examples:
-    # Auto ID: registers as netspeed-myhost-en0
+    # Auto ID: registers as netspeed-mac-mini-en0
     python3 netspeed-collector.py
 
-    # Manual ID: registers as netspeed-office-gw
+    # By IP: registers as netspeed-192.168.1.50
+    python3 netspeed-collector.py --id %i
+
+    # Custom label: registers as netspeed-office-gw
     python3 netspeed-collector.py --id office-gw
+
+    # Mix placeholders: registers as netspeed-mac-mini-192.168.1.50-en0
+    python3 netspeed-collector.py --id "%h-%i-%f"
 
     # Remote hub with specific interface
     python3 netspeed-collector.py --controller http://192.168.1.100:8080 --iface eth0
@@ -66,6 +73,27 @@ def detect_active_interface() -> str:
             best_total = total
             best = name
     return best
+
+
+def short_hostname() -> str:
+    """Return hostname without .local / .lan / .localdomain suffix, lowercased."""
+    h = socket.gethostname()
+    for suffix in ('.local', '.lan', '.localdomain', '.home'):
+        if h.lower().endswith(suffix):
+            h = h[:-len(suffix)]
+            break
+    return h.lower()
+
+
+def expand_template(template: str, host_info: dict, iface: str) -> str:
+    """Expand %h, %H, %i, %f, %o placeholders in an ID template."""
+    result = template
+    result = result.replace('%h', short_hostname())
+    result = result.replace('%H', socket.gethostname())
+    result = result.replace('%i', host_info.get('ip', 'unknown'))
+    result = result.replace('%f', iface)
+    result = result.replace('%o', platform.system().lower())
+    return result
 
 
 def get_local_ip(iface: str) -> str:
@@ -153,8 +181,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="ProbeX NIC Traffic Monitor",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Each instance registers as a separate probe (netspeed-{id}) in ProbeX,\n"
-               "so multiple hosts or interfaces show as independent tasks in Results.",
+        epilog="Each instance registers as a separate probe (netspeed-{id}) in ProbeX.\n"
+               "ID placeholders: %h=hostname  %i=IP  %f=interface  %o=OS  %H=full-hostname",
     )
     parser.add_argument("--controller", default="http://localhost:8080",
                         help="ProbeX server URL (default: http://localhost:8080)")
@@ -162,27 +190,26 @@ def main():
                         help="Sampling interval in seconds (default: 5)")
     parser.add_argument("--iface", default="auto",
                         help="Network interface to monitor (default: auto-detect)")
-    parser.add_argument("--id", default="",
-                        help="Instance ID. Probe registers as netspeed-{id}. "
-                             "Default: auto-generated as {hostname}-{iface}")
+    parser.add_argument("--id", default="%h-%f",
+                        help="Instance ID template. Supports: %%h=hostname, %%i=IP, "
+                             "%%f=interface, %%o=OS, %%H=full-hostname. "
+                             "Probe registers as netspeed-{id}. (default: %%h-%%f)")
     args = parser.parse_args()
 
     iface = detect_active_interface() if args.iface == "auto" else args.iface
-    hostname = socket.gethostname()
-
-    # Determine instance ID and probe name
-    instance_id = args.id if args.id else f"{hostname}-{iface}"
-    probe_name = f"netspeed-{instance_id}"
-    agent_id = f"{probe_name}@{hostname}"
-
     host_info = get_host_info(iface)
+
+    # Expand template placeholders in instance ID
+    instance_id = expand_template(args.id, host_info, iface)
+    probe_name = f"netspeed-{instance_id}"
+    agent_id = f"{probe_name}@{short_hostname()}"
     base = f"{args.controller}/api/v1"
 
     print(f"NIC Traffic Monitor", flush=True)
     print(f"  Probe:      {probe_name}", flush=True)
     print(f"  Agent:      {agent_id}", flush=True)
     print(f"  Interface:  {iface}", flush=True)
-    print(f"  Host:       {hostname} ({host_info['ip']})", flush=True)
+    print(f"  Host:       {host_info['hostname']} ({host_info['ip']})", flush=True)
     print(f"  OS:         {host_info['os']}", flush=True)
     print(f"  Interval:   {args.interval}s", flush=True)
     print(f"  Controller: {args.controller}", flush=True)
@@ -219,7 +246,7 @@ def main():
                     "rx_bytes_delta": drx,
                     "tx_bytes_delta": dtx,
                     "interface": iface,
-                    "hostname": hostname,
+                    "hostname": host_info["hostname"],
                     "ip": host_info["ip"],
                     "os": host_info["os"],
                 },
