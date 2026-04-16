@@ -135,6 +135,7 @@ func (h *ProbeHandler) PushResults(w http.ResponseWriter, r *http.Request) {
 	if agentID == "" {
 		agentID = "external"
 	}
+	nodeID := req.NodeID // optional — clients should generate via nodeid package
 
 	var results []*model.ProbeResult
 	for _, res := range req.Results {
@@ -148,6 +149,7 @@ func (h *ProbeHandler) PushResults(w http.ResponseWriter, r *http.Request) {
 			ID:             generateID(),
 			TaskID:         taskID,
 			AgentID:        agentID,
+			NodeID:         nodeID,
 			Timestamp:      ts,
 			Success:        res.Success,
 			LatencyMs:      res.LatencyMs,

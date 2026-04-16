@@ -28,6 +28,7 @@ type ProbeRegisterRequest struct {
 type ProbePushRequest struct {
 	TaskID  string `json:"task_id,omitempty"`
 	AgentID string `json:"agent_id,omitempty"`
+	NodeID  string `json:"node_id,omitempty"`
 	Results []struct {
 		Timestamp      *string         `json:"timestamp,omitempty"`
 		Success        bool            `json:"success"`

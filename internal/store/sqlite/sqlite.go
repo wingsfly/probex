@@ -24,6 +24,13 @@ func New(path string) (*SQLiteStore, error) {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+	// Incremental migrations for existing databases
+	migrations := []string{
+		"ALTER TABLE probe_results ADD COLUMN node_id TEXT DEFAULT ''",
+	}
+	for _, m := range migrations {
+		db.Exec(m) // ignore "duplicate column" errors
+	}
 	return &SQLiteStore{db: db}, nil
 }
 
@@ -145,9 +152,9 @@ func (s *SQLiteStore) UpdateAgentStatus(ctx context.Context, id string, status m
 
 func (s *SQLiteStore) InsertResult(ctx context.Context, r *model.ProbeResult) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO probe_results (id, task_id, agent_id, timestamp, success, latency_ms, jitter_ms, packet_loss_pct, dns_resolve_ms, tls_handshake_ms, status_code, download_bps, upload_bps, error, extra)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ID, r.TaskID, r.AgentID, r.Timestamp.UnixMilli(),
+		`INSERT INTO probe_results (id, task_id, agent_id, node_id, timestamp, success, latency_ms, jitter_ms, packet_loss_pct, dns_resolve_ms, tls_handshake_ms, status_code, download_bps, upload_bps, error, extra)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, r.TaskID, r.AgentID, r.NodeID, r.Timestamp.UnixMilli(),
 		boolToInt(r.Success), r.LatencyMs,
 		r.JitterMs, r.PacketLossPct, r.DNSResolveMs, r.TLSHandshakeMs,
 		r.StatusCode, r.DownloadBps, r.UploadBps,
@@ -163,14 +170,14 @@ func (s *SQLiteStore) InsertResults(ctx context.Context, results []*model.ProbeR
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO probe_results (id, task_id, agent_id, timestamp, success, latency_ms, jitter_ms, packet_loss_pct, dns_resolve_ms, tls_handshake_ms, status_code, download_bps, upload_bps, error, extra)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		`INSERT INTO probe_results (id, task_id, agent_id, node_id, timestamp, success, latency_ms, jitter_ms, packet_loss_pct, dns_resolve_ms, tls_handshake_ms, status_code, download_bps, upload_bps, error, extra)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, r := range results {
-		if _, err := stmt.ExecContext(ctx, r.ID, r.TaskID, r.AgentID, r.Timestamp.UnixMilli(),
+		if _, err := stmt.ExecContext(ctx, r.ID, r.TaskID, r.AgentID, r.NodeID, r.Timestamp.UnixMilli(),
 			boolToInt(r.Success), r.LatencyMs,
 			r.JitterMs, r.PacketLossPct, r.DNSResolveMs, r.TLSHandshakeMs,
 			r.StatusCode, r.DownloadBps, r.UploadBps,
@@ -189,7 +196,7 @@ func (s *SQLiteStore) QueryResults(ctx context.Context, f model.ResultFilter) ([
 	if err != nil {
 		return nil, 0, err
 	}
-	query := "SELECT id, task_id, agent_id, timestamp, success, latency_ms, jitter_ms, packet_loss_pct, dns_resolve_ms, tls_handshake_ms, status_code, download_bps, upload_bps, error, extra FROM probe_results" + where + " ORDER BY timestamp DESC"
+	query := "SELECT id, task_id, agent_id, node_id, timestamp, success, latency_ms, jitter_ms, packet_loss_pct, dns_resolve_ms, tls_handshake_ms, status_code, download_bps, upload_bps, error, extra FROM probe_results" + where + " ORDER BY timestamp DESC"
 	if f.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d OFFSET %d", f.Limit, f.Offset)
 	}
@@ -647,7 +654,7 @@ func scanResult(row scanner) (*model.ProbeResult, error) {
 	var ts int64
 	var success int
 	var errStr, extra *string
-	err := row.Scan(&r.ID, &r.TaskID, &r.AgentID, &ts, &success,
+	err := row.Scan(&r.ID, &r.TaskID, &r.AgentID, &r.NodeID, &ts, &success,
 		&r.LatencyMs, &r.JitterMs, &r.PacketLossPct,
 		&r.DNSResolveMs, &r.TLSHandshakeMs, &r.StatusCode,
 		&r.DownloadBps, &r.UploadBps, &errStr, &extra)

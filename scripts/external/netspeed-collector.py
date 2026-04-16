@@ -46,12 +46,17 @@ Examples:
 
 import argparse
 import json
+import os
 import platform
 import socket
 import sys
 import time
 import urllib.request
 import urllib.error
+
+# Allow importing probex_nodeid from the same directory
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from probex_nodeid import get_node_id
 
 try:
     import psutil
@@ -194,8 +199,8 @@ def register_probe(base: str, probe_name: str, host_info: dict) -> bool:
         return False
 
 
-def push(base: str, probe_name: str, agent_id: str, result: dict) -> bool:
-    payload = json.dumps({"agent_id": agent_id, "results": [result]}).encode()
+def push(base: str, probe_name: str, agent_id: str, node_id: str, result: dict) -> bool:
+    payload = json.dumps({"agent_id": agent_id, "node_id": node_id, "results": [result]}).encode()
     req = urllib.request.Request(f"{base}/probes/{probe_name}/push", data=payload,
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:
@@ -233,11 +238,13 @@ def main():
     instance_id = expand_template(args.id, host_info, iface)
     probe_name = f"netspeed-{instance_id}"
     agent_id = f"{probe_name}@{short_hostname()}"
+    node_id = get_node_id()
     base = f"{args.controller}/api/v1"
 
     print(f"NIC Traffic Monitor", flush=True)
     print(f"  Probe:      {probe_name}", flush=True)
     print(f"  Agent:      {agent_id}", flush=True)
+    print(f"  Node ID:    {node_id}", flush=True)
     print(f"  Interface:  {iface}", flush=True)
     print(f"  Host:       {host_info['hostname']} ({host_info['ip']})", flush=True)
     print(f"  OS:         {host_info['os']}", flush=True)
@@ -282,7 +289,7 @@ def main():
                 },
             }
 
-            ok = push(base, probe_name, agent_id, result)
+            ok = push(base, probe_name, agent_id, node_id, result)
             tag = "OK" if ok else "FAIL"
             print(f"  [{time.strftime('%H:%M:%S')}] {tag}  RX={rx_bps/1e6:8.3f} Mbps  TX={tx_bps/1e6:8.3f} Mbps", flush=True)
 

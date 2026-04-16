@@ -9,6 +9,7 @@ type ProbeResult struct {
 	ID             string          `json:"id"`
 	TaskID         string          `json:"task_id"`
 	AgentID        string          `json:"agent_id"`
+	NodeID         string          `json:"node_id,omitempty"`
 	Timestamp      time.Time       `json:"timestamp"`
 	Success        bool            `json:"success"`
 	LatencyMs      *float64        `json:"latency_ms,omitempty"`

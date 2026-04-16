@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS probe_results (
     id              TEXT PRIMARY KEY,
     task_id         TEXT NOT NULL,
     agent_id        TEXT NOT NULL,
+    node_id         TEXT DEFAULT '',
     timestamp       INTEGER NOT NULL,
     success         INTEGER NOT NULL,
     latency_ms      REAL DEFAULT 0,
