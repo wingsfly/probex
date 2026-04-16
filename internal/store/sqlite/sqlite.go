@@ -243,7 +243,7 @@ func (s *SQLiteStore) GetResultSummary(ctx context.Context, f model.ResultFilter
 
 func (s *SQLiteStore) GetLatestResults(ctx context.Context) ([]*model.ProbeResult, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT r.id, r.task_id, r.agent_id, r.timestamp, r.success, r.latency_ms, r.jitter_ms, r.packet_loss_pct, r.dns_resolve_ms, r.tls_handshake_ms, r.status_code, r.download_bps, r.upload_bps, r.error, r.extra
+		SELECT r.id, r.task_id, r.agent_id, r.node_id, r.timestamp, r.success, r.latency_ms, r.jitter_ms, r.packet_loss_pct, r.dns_resolve_ms, r.tls_handshake_ms, r.status_code, r.download_bps, r.upload_bps, r.error, r.extra
 		FROM probe_results r
 		INNER JOIN (SELECT task_id, agent_id, MAX(timestamp) as max_ts FROM probe_results GROUP BY task_id, agent_id) latest
 		ON r.task_id = latest.task_id AND r.agent_id = latest.agent_id AND r.timestamp = latest.max_ts
