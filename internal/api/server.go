@@ -14,13 +14,14 @@ import (
 )
 
 type Server struct {
-	router    *chi.Mux
-	store     store.Store
-	notifier  TaskNotifier
-	registry  *probe.Registry
-	generator *report.Generator
-	alertEval AlertEvaluator
-	mode      string // "standalone", "hub", "agent"
+	router          *chi.Mux
+	store           store.Store
+	notifier        TaskNotifier
+	registry        *probe.Registry
+	generator       *report.Generator
+	alertEval       AlertEvaluator
+	mode            string // "standalone", "hub", "agent"
+	allowedNetworks []string
 }
 
 // ServerOption allows optional configuration of the server.
@@ -29,6 +30,11 @@ type ServerOption func(*Server)
 // WithMode sets the server mode for conditional behavior.
 func WithMode(mode string) ServerOption {
 	return func(s *Server) { s.mode = mode }
+}
+
+// WithAllowedNetworks sets the IP allowlist (CIDR notation).
+func WithAllowedNetworks(cidrs []string) ServerOption {
+	return func(s *Server) { s.allowedNetworks = cidrs }
 }
 
 func NewServer(s store.Store, notifier TaskNotifier, registry *probe.Registry, gen *report.Generator, alertEval AlertEvaluator, opts ...ServerOption) *Server {
@@ -57,6 +63,16 @@ func (s *Server) setupRoutes() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
+
+	// IP allowlist (must be after RealIP so RemoteAddr is the true client IP)
+	if len(s.allowedNetworks) > 0 {
+		ipFilter, err := IPAllowlist(s.allowedNetworks)
+		if err != nil {
+			panic(fmt.Sprintf("bad allowed_networks config: %v", err))
+		}
+		r.Use(ipFilter)
+	}
+
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},

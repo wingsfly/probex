@@ -94,7 +94,10 @@ func runHub() error {
 	// Hub uses HubNotifier: task changes pushed to agents via WebSocket
 	notifier := hub.NewHubNotifier(wsManager)
 
-	srv := api.NewServer(store, notifier, registry, reportGen, alertEval, api.WithMode("hub"))
+	srv := api.NewServer(store, notifier, registry, reportGen, alertEval,
+		api.WithMode("hub"),
+		api.WithAllowedNetworks(cfg.Server.AllowedNetworks),
+	)
 	srv.SetWSManager(wsManager)
 
 	// Background workers

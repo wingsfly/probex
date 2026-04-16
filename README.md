@@ -128,9 +128,25 @@ Open `http://localhost:3000` for the dev UI.
 
 ### Hub (`configs/controller.yaml`)
 - HTTP/gRPC server addresses
+- IP access control (CIDR allowlist)
 - SQLite storage path
 - Data retention policies (default: 30 days raw, 1 year aggregated)
 - Runner concurrency
+
+### IP Access Control
+
+Restrict which networks can access the API and Web UI via `allowed_networks` (CIDR notation). Empty or omitted = allow all.
+
+```yaml
+server:
+  http_addr: ":8080"
+  allowed_networks:
+    - "192.168.70.0/24"    # office LAN
+    - "10.147.20.0/24"     # VPN
+    - "127.0.0.0/8"        # localhost
+```
+
+Bare IPs without mask (e.g. `"10.0.0.1"`) are treated as /32. Requests from non-matching IPs receive HTTP 403 Forbidden.
 
 ### Agent (`configs/agent.yaml`)
 - Agent name and region labels

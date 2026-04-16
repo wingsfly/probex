@@ -100,7 +100,10 @@ func runStandalone() error {
 	go retention.NewWorker(store, cfg.Retention.RawResults, logger).Run(bgCtx)
 
 	notifier := api.NewRunnerNotifier(runner)
-	srv := api.NewServer(store, notifier, registry, reportGen, alertEval, api.WithMode("standalone"))
+	srv := api.NewServer(store, notifier, registry, reportGen, alertEval,
+		api.WithMode("standalone"),
+		api.WithAllowedNetworks(cfg.Server.AllowedNetworks),
+	)
 
 	httpServer := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: srv.Handler()}
 	go func() {

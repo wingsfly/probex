@@ -37,8 +37,9 @@ type ProbeConfig struct {
 }
 
 type ServerConfig struct {
-	HTTPAddr string `yaml:"http_addr"`
-	GRPCAddr string `yaml:"grpc_addr"`
+	HTTPAddr        string   `yaml:"http_addr"`
+	GRPCAddr        string   `yaml:"grpc_addr"`
+	AllowedNetworks []string `yaml:"allowed_networks"` // CIDR list, e.g. ["192.168.70.0/24","10.147.20.0/24","127.0.0.1/8"]; empty = allow all
 }
 
 type StorageConfig struct {

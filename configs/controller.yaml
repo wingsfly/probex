@@ -1,6 +1,11 @@
 server:
   http_addr: ":8080"
   grpc_addr: ":9090"
+  # allowed_networks: CIDR allowlist; empty = allow all
+  # allowed_networks:
+  #   - "192.168.70.0/24"
+  #   - "10.147.20.0/24"
+  #   - "127.0.0.0/8"
 
 storage:
   driver: sqlite
