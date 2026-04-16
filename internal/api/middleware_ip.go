@@ -18,6 +18,7 @@ func IPAllowlist(cidrs []string) (func(http.Handler) http.Handler, error) {
 	}
 
 	var nets []*net.IPNet
+	hasIPv4Loopback := false
 	for _, c := range cidrs {
 		// Allow bare IPs like "127.0.0.1" without mask
 		if !strings.Contains(c, "/") {
@@ -34,6 +35,16 @@ func IPAllowlist(cidrs []string) (func(http.Handler) http.Handler, error) {
 			return nil, fmt.Errorf("invalid CIDR %q: %w", c, err)
 		}
 		nets = append(nets, ipNet)
+		// Check if this covers IPv4 loopback (127.x.x.x)
+		if ipNet.Contains(net.IPv4(127, 0, 0, 1)) {
+			hasIPv4Loopback = true
+		}
+	}
+	// Auto-add IPv6 loopback (::1) when IPv4 loopback is allowed,
+	// since macOS/Linux often connect via ::1 for localhost
+	if hasIPv4Loopback {
+		_, ipv6Lo, _ := net.ParseCIDR("::1/128")
+		nets = append(nets, ipv6Lo)
 	}
 
 	return func(next http.Handler) http.Handler {
