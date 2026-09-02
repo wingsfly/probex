@@ -1,4 +1,8 @@
-.PHONY: all build probex controller agent cli clean test run hub dev dev-backend dev-frontend web-install
+.PHONY: all build probex controller agent cli clean test run hub dev dev-backend dev-frontend web-install \
+        docker-up docker-down docker-restart docker-logs docker-ps docker-build docker-rebuild
+
+# ---- Docker (all-in-one: backend + nginx frontend) ----
+COMPOSE = docker compose -f deploy/docker-compose.probex.yml
 
 all: build
 
@@ -46,3 +50,24 @@ dev: probex
 	./bin/probex standalone & \
 	cd web && npm run dev & \
 	wait'
+
+docker-up:
+	$(COMPOSE) up -d
+
+docker-down:
+	$(COMPOSE) down
+
+docker-restart:
+	$(COMPOSE) restart
+
+docker-logs:
+	$(COMPOSE) logs -f
+
+docker-ps:
+	$(COMPOSE) ps
+
+docker-build:
+	$(COMPOSE) build
+
+docker-rebuild:
+	$(COMPOSE) up -d --build
