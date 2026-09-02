@@ -11,6 +11,8 @@
 # The bind-mounted ./data/ and ./configs/controller.yaml preserve state and
 # settings across container restarts and use the same DB the host binary uses.
 
+name: probex
+
 services:
   backend:
     build:
@@ -37,3 +39,10 @@ services:
     ports:
       - "3000:80"
     restart: unless-stopped
+
+# Pin subnet so backend's allowed_networks stays stable across recreates.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 192.168.148.0/24
