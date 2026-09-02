@@ -1,11 +1,13 @@
 server:
   http_addr: ":8080"
   grpc_addr: ":9090"
-  # allowed_networks: CIDR allowlist; empty = allow all
-  # allowed_networks:
-  #   - "192.168.70.0/24"
-  #   - "10.147.20.0/24"
-  #   - "127.0.0.0/8"
+  allowed_networks:
+    - "192.168.70.0/24"
+    - "10.147.20.0/24"
+    - "127.0.0.0/8"
+    - "172.16.0.0/12"      # Docker default bridge network
+    - "192.168.65.0/24"    # Docker Desktop for Mac host-to-container NAT gateway
+    - "192.168.148.0/24"   # Docker compose network for this project (nginx→backend)
 
 storage:
   driver: sqlite

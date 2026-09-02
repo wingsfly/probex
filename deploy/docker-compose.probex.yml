@@ -1,0 +1,39 @@
+# ProbeX all-in-one: backend (Go) + frontend (nginx) on one host.
+#
+# From project root:
+#   docker compose -f deploy/docker-compose.probex.yml up -d --build
+#   docker compose -f deploy/docker-compose.probex.yml down
+#   docker compose -f deploy/docker-compose.probex.yml logs -f
+#
+# Frontend:  http://localhost:3000
+# Backend:   http://localhost:8080   (also reachable directly, for external probes)
+#
+# The bind-mounted ./data/ and ./configs/controller.yaml preserve state and
+# settings across container restarts and use the same DB the host binary uses.
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: probex-backend:latest
+    container_name: probex-backend
+    command: ["standalone", "--config", "/etc/probex/controller.yaml"]
+    volumes:
+      - ../data:/data
+      - ../configs/controller.yaml:/etc/probex/controller.yaml:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    image: probex-frontend:latest
+    container_name: probex-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
