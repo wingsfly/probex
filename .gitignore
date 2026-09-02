@@ -40,3 +40,7 @@ Thumbs.db
 .env.local
 cli
 controller
+
+# Python
+__pycache__/
+*.pyc
