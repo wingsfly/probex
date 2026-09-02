@@ -146,11 +146,14 @@ export default function Results() {
 
   // Detect extra fields present in results (all types for table, numeric for charts)
   const presentExtraFields = useMemo(() => {
+    // 这些诊断字段即使全程为 0 也保留列，便于确认探针在测（乱序/丢包），而不是靠列的有无来猜
+    const ALWAYS_SHOW = new Set(['out_of_order', 'out_of_order_pct', 'lost_percent']);
     const allKeys = new Set<string>();
     resultsDesc.forEach(r => {
       if (r.extra) Object.keys(r.extra).forEach(k => {
         const v = (r.extra as any)[k];
-        if (v != null && v !== '' && v !== 0) allKeys.add(k);
+        // 排除数组/对象（如 iperf3 intervals 明细），否则会渲染成 [object Object]；全 0 字段默认隐藏，但白名单诊断字段始终显示
+        if (v != null && v !== '' && typeof v !== 'object' && (v !== 0 || ALWAYS_SHOW.has(k))) allKeys.add(k);
       });
     });
     return [...allKeys].sort();
