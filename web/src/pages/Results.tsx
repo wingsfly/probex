@@ -54,6 +54,9 @@ const getShortName = (raw: string) => FIELD_DICT[raw]?.[0] ?? raw;
 const TASK_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 const EXTRA_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#78716c', '#9333ea'];
 
+// 图上意义不大（多为恒定值）的字段，默认隐藏但仍在图例可选。切换任务时也重置为这个默认集，而非全部显示。
+const DEFAULT_HIDDEN_LINES = ['extra:sent_bps', 'extra:recv_bps', 'extra:sent_bytes', 'extra:recv_bytes', 'extra:total_packets'];
+
 // Standard fields that can appear in results
 const STANDARD_FIELDS: { key: keyof ProbeResult; label: string; unit: string; fmt: (v: any) => string }[] = [
   { key: 'latency_ms', label: 'Latency', unit: 'ms', fmt: (v: number) => `${v.toFixed(1)}ms` },
@@ -71,10 +74,7 @@ export default function Results() {
   const [timeRange, setTimeRange] = useState('1h');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  // 速率/字节量/总包数在图上意义不大（多为恒定值），默认隐藏但仍在图例可选；多余的 key 对没有该字段的任务无害
-  const [hiddenLines, setHiddenLines] = useState<Set<string>>(
-    () => new Set(['extra:sent_bps', 'extra:recv_bps', 'extra:sent_bytes', 'extra:recv_bytes', 'extra:total_packets'])
-  );
+  const [hiddenLines, setHiddenLines] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN_LINES));
 
   const toggleLine = (dataKey: string) => {
     setHiddenLines(prev => {
@@ -457,7 +457,7 @@ export default function Results() {
       <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1rem' }}>Results</h1>
 
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
-        <select value={taskId} onChange={e => { setTaskId(e.target.value); setHiddenLines(new Set()); }} style={selectStyle}>
+        <select value={taskId} onChange={e => { setTaskId(e.target.value); setHiddenLines(new Set(DEFAULT_HIDDEN_LINES)); }} style={selectStyle}>
           <option value="">All Tasks</option>
           {tasks.map((t) => (
             <option key={t.id} value={t.id}>{t.name} ({t.target}) [{t.probe_type}]</option>
