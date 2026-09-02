@@ -55,7 +55,13 @@ const TASK_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec
 const EXTRA_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#78716c', '#9333ea'];
 
 // 图上意义不大（多为恒定值）的字段，默认隐藏但仍在图例可选。切换任务时也重置为这个默认集，而非全部显示。
-const DEFAULT_HIDDEN_LINES = ['extra:sent_bps', 'extra:recv_bps', 'extra:sent_bytes', 'extra:recv_bytes', 'extra:total_packets'];
+// 标准字段的 line key 是其 label（如 'Download'/'Upload'）；extra 字段是 'extra:<字段名>'。
+const DEFAULT_HIDDEN_LINES = [
+  'Download', 'Upload',                                          // 标准上下行码率
+  'extra:sent_bps', 'extra:recv_bps',                           // 上下行速率
+  'extra:sent_bytes', 'extra:recv_bytes',                       // 收发字节
+  'extra:duration', 'extra:streams', 'extra:total_packets',     // 时长/流数/总包数
+];
 
 // Standard fields that can appear in results
 const STANDARD_FIELDS: { key: keyof ProbeResult; label: string; unit: string; fmt: (v: any) => string }[] = [
