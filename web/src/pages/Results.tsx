@@ -71,7 +71,10 @@ export default function Results() {
   const [timeRange, setTimeRange] = useState('1h');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  const [hiddenLines, setHiddenLines] = useState<Set<string>>(new Set());
+  // 速率/字节量/总包数在图上意义不大（多为恒定值），默认隐藏但仍在图例可选；多余的 key 对没有该字段的任务无害
+  const [hiddenLines, setHiddenLines] = useState<Set<string>>(
+    () => new Set(['extra:sent_bps', 'extra:recv_bps', 'extra:sent_bytes', 'extra:recv_bytes', 'extra:total_packets'])
+  );
 
   const toggleLine = (dataKey: string) => {
     setHiddenLines(prev => {
@@ -160,9 +163,11 @@ export default function Results() {
   }, [resultsDesc]);
 
   // Numeric-only extra fields (for chart lines)
+  // 乱序率/丢包率是诊断指标，即使全程为 0 也保留为可选图例项（默认显示，见 hiddenLines 初值）
+  const CHART_ALWAYS_LINE = new Set(['out_of_order_pct', 'lost_percent']);
   const numericExtraFields = useMemo(() =>
     presentExtraFields.filter(k =>
-      resultsDesc.some(r => r.extra && typeof (r.extra as any)[k] === 'number' && (r.extra as any)[k] !== 0)
+      resultsDesc.some(r => r.extra && typeof (r.extra as any)[k] === 'number' && ((r.extra as any)[k] !== 0 || CHART_ALWAYS_LINE.has(k)))
     ),
     [presentExtraFields, resultsDesc]
   );
