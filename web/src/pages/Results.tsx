@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import type { ProbeResult, Task } from '../types/api';
+import type { ProbeMetadata, ProbeResult, Task } from '../types/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
@@ -81,6 +81,7 @@ export default function Results() {
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [hiddenLines, setHiddenLines] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN_LINES));
+  const appliedDefaultHiddenKeys = useRef(new Set<string>());
 
   const toggleLine = (dataKey: string) => {
     setHiddenLines(prev => {
@@ -125,6 +126,11 @@ export default function Results() {
     queryFn: () => api.getTasks(),
   });
 
+  const { data: probesData } = useQuery({
+    queryKey: ['probes'],
+    queryFn: () => api.getProbes(),
+  });
+
   // Fetch latest results (one per task) to discover ALL task_ids including external probes
   const { data: latestData } = useQuery({
     queryKey: ['latestResults'],
@@ -134,6 +140,7 @@ export default function Results() {
   const resultsDesc: ProbeResult[] = data?.data ?? [];
   const resultsAsc: ProbeResult[] = [...resultsDesc].reverse();
   const tasks: Task[] = tasksData?.data ?? [];
+  const probes: ProbeMetadata[] = probesData?.data ?? [];
   const latestResults: ProbeResult[] = latestData?.data ?? [];
 
   const taskMap = useMemo(() => {
@@ -188,6 +195,18 @@ export default function Results() {
     resultsDesc.forEach(r => ids.add(r.task_id));
     return [...ids];
   }, [resultsDesc]);
+
+  const defaultHiddenExtraFields = useMemo(() => {
+    const activeTaskId = taskId || (involvedTaskIds.length === 1 ? involvedTaskIds[0] : '');
+    if (!activeTaskId) return [];
+
+    const probeName = taskMap.get(activeTaskId)?.probe_type
+      ?? (activeTaskId.startsWith('ext_') ? activeTaskId.slice('ext_'.length) : '');
+    const metadata = probes.find(probe => probe.name === probeName);
+    return metadata?.output_schema?.extra_fields
+      ?.filter(field => field.default_hidden)
+      .map(field => field.name) ?? [];
+  }, [taskId, involvedTaskIds, taskMap, probes]);
 
   const isMultiTask = !taskId && involvedTaskIds.length > 1;
 
@@ -314,6 +333,17 @@ export default function Results() {
     });
     return lines;
   }, [chartableStdFields, presentExtraFields]);
+
+  useEffect(() => {
+    const chartLineKeys = new Set(chartLines.map(line => line.key));
+    const configuredKeys = defaultHiddenExtraFields
+      .map(field => `extra:${field}`)
+      .filter(key => chartLineKeys.has(key) && !appliedDefaultHiddenKeys.current.has(key));
+    if (configuredKeys.length === 0) return;
+
+    setHiddenLines(previous => new Set([...previous, ...configuredKeys]));
+    configuredKeys.forEach(key => appliedDefaultHiddenKeys.current.add(key));
+  }, [chartLines, defaultHiddenExtraFields]);
 
   const hasAnyData = resultsDesc.length > 0;
 
@@ -463,7 +493,11 @@ export default function Results() {
       <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1rem' }}>Results</h1>
 
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
-        <select value={taskId} onChange={e => { setTaskId(e.target.value); setHiddenLines(new Set(DEFAULT_HIDDEN_LINES)); }} style={selectStyle}>
+        <select value={taskId} onChange={e => {
+          setTaskId(e.target.value);
+          appliedDefaultHiddenKeys.current.clear();
+          setHiddenLines(new Set(DEFAULT_HIDDEN_LINES));
+        }} style={selectStyle}>
           <option value="">All Tasks</option>
           {tasks.map((t) => (
             <option key={t.id} value={t.id}>{t.name} ({t.target}) [{t.probe_type}]</option>

@@ -145,6 +145,7 @@ export interface ProbeMetadata {
       unit?: string;
       description?: string;
       chartable?: boolean;
+      default_hidden?: boolean;
     }>;
   };
 }
