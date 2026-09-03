@@ -47,6 +47,63 @@ Distributed mode:
 docker compose -f deploy/docker-compose.distributed.yml -f deploy/docker-compose.distributed.build.yml up -d --build
 ```
 
+## 3) All-in-One Deploy (`docker-compose.probex.yml`)
+
+`docker-compose.probex.yml` runs the backend (standalone) **and** an
+nginx-served frontend together on one host. It bind-mounts `../data`,
+`../configs/controller.yaml`, and `../scripts/probes` (read-only, for
+script-probe hot reload).
+
+### Environment-specific config → `docker-compose.override.yml`
+
+Per-host mounts, secrets, and paths (an ASR data dir, SSH creds, etc.) belong in
+`docker-compose.override.yml`, which is **gitignored** so it never touches the
+shared compose file:
+
+```yaml
+services:
+  backend:
+    volumes:
+      - /host/path/data:/host/path/data
+      - ../configs/ssh:/root/.ssh:ro
+```
+
+Because the main file is `docker-compose.probex.yml` (not the default
+`docker-compose.yml`), compose does **not** auto-load the override. You **must
+pass both `-f` flags** on every command:
+
+```bash
+docker compose \
+  -f deploy/docker-compose.probex.yml \
+  -f deploy/docker-compose.override.yml \
+  up -d --build backend frontend
+```
+
+Host-local edits to a tracked file that shouldn't be committed (e.g.
+`configs/controller.yaml` with a host-specific `script_dir`) can be shielded
+from `git pull` with `git update-index --skip-worktree <file>`.
+
+### Update workflow
+
+- **Frontend-only change** — rebuild just the frontend with `--no-deps` so the
+  backend (and live monitoring) is **not** restarted:
+  ```bash
+  docker compose -f deploy/docker-compose.probex.yml -f deploy/docker-compose.override.yml \
+    up -d --build --no-deps frontend
+  ```
+- **Backend change** — rebuild `backend` (this restarts it, a few seconds of
+  monitoring gap). If a rebuild seems to run stale code, confirm the source is
+  current (`git rev-parse HEAD`) then `build --no-cache backend`.
+- The bind-mounted `../data` (sqlite db) and `../configs/controller.yaml`
+  survive rebuilds.
+
+### Script probes: hot reload
+
+`../scripts/probes` is bind-mounted, so editing a script's **logic** takes
+effect immediately (each run re-execs the file). Adding/removing a script or
+changing its `PROBEX_META` metadata needs a rescan: click **Rescan Scripts** on
+the Probes page, or `POST /api/v1/probes/rescan`. No restart required.
+
 ## Frontend During Local Development
 
 If you want to use the web UI in local dev, run frontend separately:
