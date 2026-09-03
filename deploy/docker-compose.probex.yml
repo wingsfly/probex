@@ -24,6 +24,7 @@ services:
     volumes:
       - ../data:/data
       - ../configs/controller.yaml:/etc/probex/controller.yaml:ro
+      - ../scripts/probes:/etc/probex/scripts    # 脚本探针热更新：改宿主机脚本即时生效，Probes 页 Rescan 加载新脚本/元数据
     ports:
       - "8080:8080"
     restart: unless-stopped

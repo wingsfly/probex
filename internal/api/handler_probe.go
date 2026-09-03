@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -15,10 +16,22 @@ type ProbeHandler struct {
 	registry  *probe.Registry
 	store     store.Store
 	alertEval AlertEvaluator
+	scriptDir string // for rescanning script probes
 }
 
-func NewProbeHandler(reg *probe.Registry, s store.Store, alertEval AlertEvaluator) *ProbeHandler {
-	return &ProbeHandler{registry: reg, store: s, alertEval: alertEval}
+func NewProbeHandler(reg *probe.Registry, s store.Store, alertEval AlertEvaluator, scriptDir string) *ProbeHandler {
+	return &ProbeHandler{registry: reg, store: s, alertEval: alertEval, scriptDir: scriptDir}
+}
+
+// Rescan reloads script probes from the script directory, picking up new,
+// deleted, or metadata-changed scripts without a restart.
+func (h *ProbeHandler) Rescan(w http.ResponseWriter, r *http.Request) {
+	if h.scriptDir == "" {
+		writeError(w, http.StatusBadRequest, "script dir not configured on this node")
+		return
+	}
+	loaded := probe.ReloadScripts(h.scriptDir, h.registry, slog.Default())
+	writeData(w, map[string]any{"reloaded": loaded, "dir": h.scriptDir})
 }
 
 // List returns metadata for all registered probes (builtin + script + external).

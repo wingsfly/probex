@@ -57,6 +57,19 @@ func (r *Registry) UnregisterExternal(name string) {
 	}
 }
 
+// RemoveByKind removes all probers/metadata of the given kind.
+// Used by script rescan to clear stale script probes before reloading.
+func (r *Registry) RemoveByKind(kind ProbeKind) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for name, m := range r.metadata {
+		if m.Kind == kind {
+			delete(r.metadata, name)
+			delete(r.probers, name)
+		}
+	}
+}
+
 // Get returns a prober by name (for execution).
 func (r *Registry) Get(name string) (Prober, error) {
 	r.mu.RLock()

@@ -22,6 +22,7 @@ type Server struct {
 	alertEval       AlertEvaluator
 	mode            string // "standalone", "hub", "agent"
 	allowedNetworks []string
+	scriptDir       string // for script-probe rescan
 }
 
 // ServerOption allows optional configuration of the server.
@@ -35,6 +36,11 @@ func WithMode(mode string) ServerOption {
 // WithAllowedNetworks sets the IP allowlist (CIDR notation).
 func WithAllowedNetworks(cidrs []string) ServerOption {
 	return func(s *Server) { s.allowedNetworks = cidrs }
+}
+
+// WithScriptDir sets the script-probe directory so the API can rescan it.
+func WithScriptDir(dir string) ServerOption {
+	return func(s *Server) { s.scriptDir = dir }
 }
 
 func NewServer(s store.Store, notifier TaskNotifier, registry *probe.Registry, gen *report.Generator, alertEval AlertEvaluator, opts ...ServerOption) *Server {
@@ -87,7 +93,7 @@ func (s *Server) setupRoutes() {
 	pluginH := NewPluginHandler(s.registry)
 	reportH := NewReportHandler(s.store, s.generator)
 	alertH := NewAlertHandler(s.store)
-	probeH := NewProbeHandler(s.registry, s.store, s.alertEval)
+	probeH := NewProbeHandler(s.registry, s.store, s.alertEval, s.scriptDir)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Mode info
@@ -129,6 +135,7 @@ func (s *Server) setupRoutes() {
 
 		// Probes (unified registry)
 		r.Get("/probes", probeH.List)
+		r.Post("/probes/rescan", probeH.Rescan)
 		r.Get("/probes/{name}", probeH.Get)
 		r.Post("/probes/register", probeH.Register)
 		r.Delete("/probes/{name}", probeH.Deregister)

@@ -103,6 +103,7 @@ func runStandalone() error {
 	srv := api.NewServer(store, notifier, registry, reportGen, alertEval,
 		api.WithMode("standalone"),
 		api.WithAllowedNetworks(cfg.Server.AllowedNetworks),
+		api.WithScriptDir(cfg.Probe.ScriptDir),
 	)
 
 	httpServer := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: srv.Handler()}

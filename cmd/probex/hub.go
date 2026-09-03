@@ -97,6 +97,7 @@ func runHub() error {
 	srv := api.NewServer(store, notifier, registry, reportGen, alertEval,
 		api.WithMode("hub"),
 		api.WithAllowedNetworks(cfg.Server.AllowedNetworks),
+		api.WithScriptDir(cfg.Probe.ScriptDir),
 	)
 	srv.SetWSManager(wsManager)
 

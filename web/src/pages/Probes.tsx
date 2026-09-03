@@ -7,11 +7,28 @@ export default function Probes() {
   const [filter, setFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [rescanning, setRescanning] = useState(false);
+  const [rescanMsg, setRescanMsg] = useState('');
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, refetch } = useQuery({
     queryKey: ['probes'],
     queryFn: () => api.getProbes(),
   });
+
+  const handleRescan = async () => {
+    setRescanning(true);
+    setRescanMsg('');
+    try {
+      const res = await api.rescanProbes();
+      await refetch();
+      setRescanMsg(`已重新扫描，加载 ${res.data?.reloaded ?? 0} 个脚本探针`);
+    } catch (e: any) {
+      setRescanMsg('重扫失败：' + (e?.message || e));
+    } finally {
+      setRescanning(false);
+      setTimeout(() => setRescanMsg(''), 5000);
+    }
+  };
 
   const probes: ProbeMetadata[] = data?.data ?? [];
 
@@ -27,7 +44,19 @@ export default function Probes() {
 
   return (
     <div>
-      <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1rem' }}>Probes</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        <h1 style={{ fontSize: '1.5rem', fontWeight: 600, margin: 0 }}>Probes</h1>
+        <button onClick={handleRescan} disabled={rescanning}
+          title="重新扫描脚本目录，加载新增/删除的脚本或更新过的探针元数据（脚本执行逻辑改动无需重扫，即时生效）"
+          style={{
+            padding: '0.4rem 0.75rem', border: '1px solid #10b981', borderRadius: 6,
+            background: rescanning ? '#d1fae5' : '#10b981', color: rescanning ? '#065f46' : '#fff',
+            cursor: rescanning ? 'default' : 'pointer', fontSize: '0.8rem', fontWeight: 500,
+          }}>
+          {rescanning ? '扫描中…' : '↻ Rescan Scripts'}
+        </button>
+        {rescanMsg && <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>{rescanMsg}</span>}
+      </div>
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
         {(['all', 'builtin', 'script', 'external'] as const).map(kind => (

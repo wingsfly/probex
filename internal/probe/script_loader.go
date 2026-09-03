@@ -9,20 +9,20 @@ import (
 // LoadScripts scans a directory for probe scripts and registers them.
 // Files must contain a valid PROBEX_META header to be registered.
 // Non-probe files are silently skipped.
-func LoadScripts(dir string, registry *Registry, logger *slog.Logger) {
+func LoadScripts(dir string, registry *Registry, logger *slog.Logger) int {
 	if dir == "" {
-		return
+		return 0
 	}
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
 		logger.Debug("script dir not found, skipping", "dir", dir)
-		return
+		return 0
 	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		logger.Error("read script dir", "dir", dir, "error", err)
-		return
+		return 0
 	}
 
 	loaded := 0
@@ -52,4 +52,13 @@ func LoadScripts(dir string, registry *Registry, logger *slog.Logger) {
 	if loaded > 0 {
 		logger.Info("script probes loaded", "count", loaded, "dir", dir)
 	}
+	return loaded
+}
+
+// ReloadScripts clears previously loaded script probes and re-scans the
+// directory, so new/edited scripts (and changed PROBEX_META metadata) take
+// effect without restarting the process. Returns the number loaded.
+func ReloadScripts(dir string, registry *Registry, logger *slog.Logger) int {
+	registry.RemoveByKind(ProbeKindScript)
+	return LoadScripts(dir, registry, logger)
 }

@@ -46,6 +46,7 @@ export const api = {
   // Probes (unified registry)
   getProbes: () => request<any>('/probes'),
   getProbe: (name: string) => request<any>(`/probes/${name}`),
+  rescanProbes: () => request<any>('/probes/rescan', { method: 'POST' }),
 
   // Reports
   getReports: () => request<any>('/reports'),
