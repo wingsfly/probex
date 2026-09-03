@@ -1,5 +1,7 @@
 # ProbeX Docker Deploy
 
+> 中文版见 [README.zh.md](README.zh.md)。
+
 This folder supports two deployment paths:
 
 1. Prebuilt image (recommended for users)
