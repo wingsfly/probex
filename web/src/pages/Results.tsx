@@ -510,7 +510,7 @@ export default function Results() {
         <>
           {/* Chart */}
           {hasAnyData && (
-            <div style={{ background: '#fff', borderRadius: 8, padding: '1rem', border: '1px solid #e5e7eb', marginBottom: '1rem' }}>
+            <div className="results-chart" style={{ background: '#fff', borderRadius: 8, padding: '1rem', border: '1px solid #e5e7eb', marginBottom: '1rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                 <h2 style={{ fontSize: '1rem', fontWeight: 500, margin: 0 }}>
                   {isMultiTask ? 'Latency by Task' : 'Metrics Over Time'}

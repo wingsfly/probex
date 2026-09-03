@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /probex ./cmd/probex
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates iperf3 bash python3
+RUN apk add --no-cache ca-certificates iperf3 bash python3 py3-websocket-client openssh-client socat
 COPY --from=builder /probex /usr/local/bin/probex
 COPY scripts/probes /etc/probex/scripts/
 
