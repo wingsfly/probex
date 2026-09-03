@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -27,7 +28,40 @@ func (h *ResultHandler) Query(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// slim=1: strip large array-valued extra fields (e.g. iperf3 "intervals")
+	// to shrink payloads for long time-range queries. Charts/table don't use them.
+	if r.URL.Query().Get("slim") == "1" {
+		for _, res := range results {
+			res.Extra = slimExtra(res.Extra)
+		}
+	}
 	writeList(w, results, total, filter.Limit, filter.Offset)
+}
+
+// slimExtra drops array-valued keys from an extra JSON object, keeping scalar
+// and object fields intact. Returns the input unchanged on any parse issue.
+func slimExtra(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return raw
+	}
+	changed := false
+	for k, v := range m {
+		if t := bytes.TrimSpace(v); len(t) > 0 && t[0] == '[' {
+			delete(m, k)
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	if out, err := json.Marshal(m); err == nil {
+		return out
+	}
+	return raw
 }
 
 func (h *ResultHandler) Summary(w http.ResponseWriter, r *http.Request) {

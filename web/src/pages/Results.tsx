@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { ProbeResult, Task } from '../types/api';
@@ -81,6 +81,7 @@ export default function Results() {
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [hiddenLines, setHiddenLines] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN_LINES));
+  const [page, setPage] = useState(0);
 
   const toggleLine = (dataKey: string) => {
     setHiddenLines(prev => {
@@ -109,7 +110,8 @@ export default function Results() {
   const limitByRange: Record<string, string> = { '1h': '2000', '6h': '5000', '24h': '15000', '7d': '50000', 'custom': '10000' };
   // Larger ranges: slower refresh (no point refreshing 7d data every 10s)
   const refreshByRange: Record<string, number | false> = { '1h': 10000, '6h': 30000, '24h': 60000, '7d': false, 'custom': false };
-  const params = new URLSearchParams({ limit: limitByRange[timeRange] ?? '2000', from: fromTime() });
+  // slim=1: 后端省略 extra 里的大数组(如 iperf3 intervals)，前端不用它，可大幅减小长范围 payload
+  const params = new URLSearchParams({ limit: limitByRange[timeRange] ?? '2000', from: fromTime(), slim: '1' });
   const to = toTime();
   if (to) params.set('to', to);
   if (taskId) params.set('task_id', taskId);
@@ -316,6 +318,12 @@ export default function Results() {
   }, [chartableStdFields, presentExtraFields]);
 
   const hasAnyData = resultsDesc.length > 0;
+
+  // 表格分页：切换任务/时间范围时回到第一页；数据刷新变少时 clamp 当前页
+  useEffect(() => { setPage(0); }, [taskId, timeRange, customFrom, customTo]);
+  const PAGE_SIZE = 100;
+  const totalPages = Math.max(1, Math.ceil(resultsDesc.length / PAGE_SIZE));
+  const curPage = Math.min(page, totalPages - 1);
 
   const queryClient = useQueryClient();
   const clearMutation = useMutation({
@@ -595,7 +603,7 @@ export default function Results() {
                 </tr>
               </thead>
               <tbody>
-                {resultsDesc.slice(0, 500).map((r) => {
+                {resultsDesc.slice(curPage * PAGE_SIZE, curPage * PAGE_SIZE + PAGE_SIZE).map((r) => {
                   const task = taskMap.get(r.task_id);
                   const extra = (r.extra ?? {}) as Record<string, any>;
                   return (
@@ -638,6 +646,13 @@ export default function Results() {
             </table>
             {resultsDesc.length === 0 && <p style={{ padding: '2rem', textAlign: 'center', color: '#6b7280' }}>No results for this filter</p>}
           </div>
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', marginTop: '0.5rem', fontSize: '0.8rem', color: '#374151' }}>
+              <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={curPage === 0} style={pageBtnStyle}>← 上一页</button>
+              <span>第 {curPage + 1} / {totalPages} 页（共 {resultsDesc.length} 行，每页 {PAGE_SIZE}）</span>
+              <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={curPage >= totalPages - 1} style={pageBtnStyle}>下一页 →</button>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -700,6 +715,10 @@ const selectStyle: React.CSSProperties = {
 };
 const thStyle: React.CSSProperties = { padding: '0.75rem 0.5rem', fontWeight: 500 };
 const tdStyle: React.CSSProperties = { padding: '0.5rem' };
+const pageBtnStyle: React.CSSProperties = {
+  padding: '0.3rem 0.7rem', border: '1px solid #d1d5db', borderRadius: 6,
+  background: '#fff', color: '#374151', cursor: 'pointer', fontSize: '0.8rem',
+};
 const legendBtnStyle: React.CSSProperties = {
   padding: '2px 10px', border: '1px solid #d1d5db', borderRadius: 4,
   background: '#f9fafb', fontSize: '0.75rem', cursor: 'pointer', color: '#374151',
