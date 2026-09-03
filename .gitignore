@@ -44,3 +44,7 @@ controller
 # Python
 __pycache__/
 *.pyc
+
+# Docker — environment-specific compose overrides (per-host mounts, secrets, paths)
+docker-compose.override.yml
+docker-compose.override.yaml

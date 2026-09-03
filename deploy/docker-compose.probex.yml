@@ -24,7 +24,8 @@ services:
     volumes:
       - ../data:/data
       - ../configs/controller.yaml:/etc/probex/controller.yaml:ro
-      - ../scripts/probes:/etc/probex/scripts    # 脚本探针热更新：改宿主机脚本即时生效，Probes 页 Rescan 加载新脚本/元数据
+      - ../scripts/probes:/etc/probex/scripts:ro    # 脚本探针热更新：改宿主机脚本即时生效，Probes 页 Rescan 加载新脚本/元数据（只读，容器不改脚本）
+    # 环境特有挂载（如 asr-bench 用的数据目录/SSH 凭据）放 docker-compose.override.yml，不进本通用文件
     ports:
       - "8080:8080"
     restart: unless-stopped
