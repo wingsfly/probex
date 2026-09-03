@@ -40,10 +40,13 @@ type Iperf3Extra struct {
 	RecvBytes   float64 `json:"recv_bytes"`
 	Retransmits int     `json:"retransmits"`
 	// UDP-specific stats
-	JitterMs       float64 `json:"jitter_ms"`
+	// JitterMs / LostPercent are promoted to the standard Result fields
+	// (jitter_ms / packet_loss_pct); json:"-" keeps them out of extra so the
+	// chart/table don't show duplicate "jitter_ms"/"lost_percent" lines.
+	JitterMs       float64 `json:"-"`
 	LostPackets    int     `json:"lost_packets"`
 	TotalPackets   int     `json:"total_packets"`
-	LostPercent    float64 `json:"lost_percent"`
+	LostPercent    float64 `json:"-"`
 	OutOfOrder     int     `json:"out_of_order"`
 	OutOfOrderPct  float64 `json:"out_of_order_pct"`
 	// Per-interval data for detailed analysis
@@ -108,8 +111,6 @@ func (p *Iperf3Prober) Metadata() ProbeMetadata {
 				{Name: "retransmits", Type: "number", Description: "TCP retransmits", Chartable: true},
 				{Name: "out_of_order", Type: "number", Description: "Out-of-order packets"},
 				{Name: "out_of_order_pct", Type: "number", Unit: "%", Description: "Out-of-order percentage", Chartable: true},
-				{Name: "jitter_ms", Type: "number", Unit: "ms", Description: "UDP jitter", Chartable: true},
-				{Name: "lost_percent", Type: "number", Unit: "%", Description: "UDP loss percentage", Chartable: true},
 				{Name: "sent_bps", Type: "number", Unit: "bps", Description: "Sent bitrate"},
 				{Name: "recv_bps", Type: "number", Unit: "bps", Description: "Received bitrate"},
 			},
