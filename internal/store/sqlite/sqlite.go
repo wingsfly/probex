@@ -17,10 +17,15 @@ type SQLiteStore struct {
 }
 
 func New(path string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	// modernc.org/sqlite uses the _pragma= DSN form. The previous mattn-style
+	// _journal_mode/_busy_timeout params were silently ignored, so WAL and
+	// busy_timeout never took effect — occasional concurrent writes hit
+	// SQLITE_BUSY and returned HTTP 500 on /push.
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	db.SetMaxOpenConns(1) // SQLite has a single writer; serialize DB access to eliminate lock contention
 	if _, err := db.Exec(schemaSQL); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
