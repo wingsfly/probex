@@ -63,15 +63,43 @@ test_stun() {
   for i in $(seq 1 "$COUNT"); do
     local start_ms=$(($(date +%s%N) / 1000000))
 
-    # Use stunclient if available, otherwise use netcat for basic connectivity
+    # Prefer stunclient; else a real STUN binding request via python3 (busybox
+    # nc is unreliable for UDP and hangs to timeout); nc only as last resort.
     if command -v stunclient &>/dev/null; then
       local result=$(stunclient "$TARGET" "$PORT" 2>&1)
       if echo "$result" | grep -q "Mapped address"; then
         MAPPED=$(echo "$result" | grep "Mapped address" | awk '{print $NF}')
         success_count=$((success_count + 1))
       fi
+    elif command -v python3 &>/dev/null; then
+      local mapped
+      if mapped=$(python3 - "$TARGET" "$PORT" <<'PY' 2>/dev/null
+import socket, struct, sys
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2)
+    s.sendto(struct.pack('>HHI', 1, 0, 0x2112a442) + b'\x01' * 12, (sys.argv[1], int(sys.argv[2])))
+    data, _ = s.recvfrom(1024)
+except Exception:
+    sys.exit(1)
+i = 20  # skip 20-byte STUN header, then walk attributes
+while i + 4 <= len(data):
+    at, al = struct.unpack('>HH', data[i:i+4]); v = data[i+4:i+4+al]
+    if at in (0x0020, 0x0001) and len(v) >= 8:  # (XOR-)MAPPED-ADDRESS
+        if at == 0x0020:
+            p = struct.unpack('>H', v[2:4])[0] ^ 0x2112
+            ip = bytes(b ^ m for b, m in zip(v[4:8], b'\x21\x12\xa4\x42'))
+        else:
+            p = struct.unpack('>H', v[2:4])[0]; ip = v[4:8]
+        print('%d.%d.%d.%d:%d' % (ip[0], ip[1], ip[2], ip[3], p)); break
+    i += 4 + al + ((4 - al % 4) % 4)
+sys.exit(0)
+PY
+      ); then
+        success_count=$((success_count + 1))
+        [ -n "$mapped" ] && MAPPED="$mapped"
+      fi
     else
-      # Fallback: simple UDP reachability test
+      # Last resort: simple UDP reachability test via netcat
       if echo -ne '\x00\x01\x00\x00\x21\x12\xa4\x42\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' | \
          timeout 3 nc -u -w 2 "$TARGET" "$PORT" 2>/dev/null | head -c 1 | grep -q .; then
         success_count=$((success_count + 1))
