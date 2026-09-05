@@ -60,7 +60,11 @@ func aggregateByTask(results []*model.ProbeResult, points int) []*model.ProbeRes
 	}
 	out := make([]*model.ProbeResult, 0, points)
 	for _, tid := range order {
-		out = append(out, aggregateResults(byTask[tid], per)...)
+		pts := aggregateResults(byTask[tid], per)
+		for _, p := range pts {
+			p.Extra = nil // All Tasks chart only plots per-task latency; drop extra to shrink payload
+		}
+		out = append(out, pts...)
 	}
 	return out
 }
