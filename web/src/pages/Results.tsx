@@ -25,7 +25,6 @@ const FIELD_DICT: Record<string, [string, string]> = {
   'audio_end_to_tts_ms': ['Wait TTS', '说完话到TTS合成开始(ms)。计算: ttsStartTime - tAudioEnd。ttsStartTime = interact WS在finalAsrTime之后首次收到tts_duration事件的时刻'],
   'tts_to_avatar_speak_ms': ['TTS→Lip', 'TTS事件到嘴巴开始动(ms)。计算: firstVmr1Time - ttsStartTime。firstVmr1Time = interact WS首次收到vmr_status=1的时刻'],
   'avatar_speak_duration_ms': ['Avatar Dur', '数字人说话挂钟时间(ms)。计算: avatarSpeakEnd - avatarSpeakStart。起点=首个vmr=0/1，终点=最后一个vmr=2。包含多段TTS之间的等待间隔'],
-  'tts_total_duration_ms': ['TTS Len', 'TTS合成音频总时长(ms)。计算: 所有interact WS tts_duration值的累加。注意: 这是原始合成时长，实际播放约为此值的2/3（约1.5倍速播放）'],
   'lip_move_ms': ['Lip Move', '嘴巴实际动的累计时长(ms)。计算: 每段(vmr=2时刻 - 该段首个vmr=0/1时刻)之和。不含段间等待。对比Avatar Dur可看段间间隔'],
   'lip_sync_diff_ms': ['Lip Sync', '唇形同步偏差(ms)。计算: actual_audio_duration_ms - lip_move_ms。正值=客户端听到的声音比嘴动的时间长（嘴停后音频仍在缓冲播放）'],
   'audio_end_to_playback_ms': ['Wait Play', '说完话到听到回复(ms)。计算: actualAudioStart - tAudioEnd。actualAudioStart = AnalyserNode检测到RMS能量>阈值的时刻，仅在finalAsrTime设置后才开始检测'],
