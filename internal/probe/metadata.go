@@ -35,11 +35,12 @@ type OutputSchema struct {
 
 // ExtraField describes a custom metric in Result.Extra.
 type ExtraField struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"` // "number", "string", "boolean"
-	Unit        string `json:"unit,omitempty"`
-	Description string `json:"description,omitempty"`
-	Chartable   bool   `json:"chartable,omitempty"` // hint: can be plotted
+	Name          string `json:"name"`
+	Type          string `json:"type"` // "number", "string", "boolean"
+	Unit          string `json:"unit,omitempty"`
+	Description   string `json:"description,omitempty"`
+	Chartable     bool   `json:"chartable,omitempty"`      // hint: can be plotted
+	DefaultHidden bool   `json:"default_hidden,omitempty"` // hint: hidden when the chart is first shown
 }
 
 // MetadataProber is an optional interface. Probes that implement it
