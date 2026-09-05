@@ -33,7 +33,36 @@ func (h *ResultHandler) Aggregate(w http.ResponseWriter, r *http.Request) {
 	if p, e := strconv.Atoi(r.URL.Query().Get("points")); e == nil && p > 0 {
 		points = p
 	}
-	writeData(w, aggregateResults(results, points))
+	if filter.TaskID != "" {
+		writeData(w, aggregateResults(results, points))
+		return
+	}
+	// All Tasks: aggregate each task independently so multi-task latency lines
+	// stay separate and the payload stays small over slow links.
+	writeData(w, aggregateByTask(results, points))
+}
+
+func aggregateByTask(results []*model.ProbeResult, points int) []*model.ProbeResult {
+	byTask := map[string][]*model.ProbeResult{}
+	order := []string{}
+	for _, r := range results {
+		if _, ok := byTask[r.TaskID]; !ok {
+			order = append(order, r.TaskID)
+		}
+		byTask[r.TaskID] = append(byTask[r.TaskID], r)
+	}
+	if len(byTask) == 0 {
+		return results
+	}
+	per := points / len(byTask)
+	if per < 50 {
+		per = 50
+	}
+	out := make([]*model.ProbeResult, 0, points)
+	for _, tid := range order {
+		out = append(out, aggregateResults(byTask[tid], per)...)
+	}
+	return out
 }
 
 // aggregateResults buckets results (input is timestamp-DESC) into at most

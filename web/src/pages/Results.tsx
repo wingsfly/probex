@@ -112,22 +112,20 @@ export default function Results() {
   // Larger ranges: slower refresh (no point refreshing 7d data every 10s)
   const refreshByRange: Record<string, number | false> = { '1h': 10000, '6h': 30000, '24h': 60000, '7d': false, 'custom': false };
   const refresh = refreshByRange[timeRange] ?? 10000;
-  const isSingleTask = !!taskId;
   const TABLE_PAGE_SIZE = 100;
 
-  // Chart data: single task → server-side time-bucket aggregation (~800 points),
-  // so the client never pulls thousands of raw rows just to draw ~1000 pixels.
-  // All Tasks → raw with a moderate cap (latency-only multi-task chart).
+  // Chart data: server-side time-bucket aggregation (~800 points, per-task for
+  // All Tasks) so the client never pulls thousands of raw rows to draw ~1000
+  // pixels — critical over slow links (e.g. cross-site ZeroTier).
   const chartParams = () => {
-    const p = new URLSearchParams({ from: fromTime(), slim: '1' });
+    const p = new URLSearchParams({ from: fromTime(), slim: '1', points: '800' });
     const to = toTime(); if (to) p.set('to', to);
     if (taskId) p.set('task_id', taskId);
-    if (isSingleTask) p.set('points', '800'); else p.set('limit', '3000');
     return p.toString();
   };
   const { data, isLoading } = useQuery({
     queryKey: ['chart', taskId, timeRange, customFrom, customTo],
-    queryFn: () => isSingleTask ? api.getResultsAggregate(chartParams()) : api.getResults(chartParams()),
+    queryFn: () => api.getResultsAggregate(chartParams()),
     refetchInterval: refresh,
   });
 
