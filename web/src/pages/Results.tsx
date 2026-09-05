@@ -106,20 +106,39 @@ export default function Results() {
     return '';
   };
 
-  // Scale limit by time range; larger ranges pull more data
-  const limitByRange: Record<string, string> = { '1h': '2000', '6h': '5000', '24h': '15000', '7d': '50000', 'custom': '10000' };
   // Larger ranges: slower refresh (no point refreshing 7d data every 10s)
   const refreshByRange: Record<string, number | false> = { '1h': 10000, '6h': 30000, '24h': 60000, '7d': false, 'custom': false };
-  // slim=1: 后端省略 extra 里的大数组(如 iperf3 intervals)，前端不用它，可大幅减小长范围 payload
-  const params = new URLSearchParams({ limit: limitByRange[timeRange] ?? '2000', from: fromTime(), slim: '1' });
-  const to = toTime();
-  if (to) params.set('to', to);
-  if (taskId) params.set('task_id', taskId);
+  const refresh = refreshByRange[timeRange] ?? 10000;
+  const isSingleTask = !!taskId;
+  const TABLE_PAGE_SIZE = 100;
 
+  // Chart data: single task → server-side time-bucket aggregation (~800 points),
+  // so the client never pulls thousands of raw rows just to draw ~1000 pixels.
+  // All Tasks → raw with a moderate cap (latency-only multi-task chart).
+  const chartParams = () => {
+    const p = new URLSearchParams({ from: fromTime(), slim: '1' });
+    const to = toTime(); if (to) p.set('to', to);
+    if (taskId) p.set('task_id', taskId);
+    if (isSingleTask) p.set('points', '800'); else p.set('limit', '3000');
+    return p.toString();
+  };
   const { data, isLoading } = useQuery({
-    queryKey: ['results', taskId, timeRange, customFrom, customTo],
-    queryFn: () => api.getResults(params.toString()),
-    refetchInterval: refreshByRange[timeRange] ?? 10000,
+    queryKey: ['chart', taskId, timeRange, customFrom, customTo],
+    queryFn: () => isSingleTask ? api.getResultsAggregate(chartParams()) : api.getResults(chartParams()),
+    refetchInterval: refresh,
+  });
+
+  // Table data: server-side pagination — only the current page's rows are fetched.
+  const tableParams = () => {
+    const p = new URLSearchParams({ from: fromTime(), slim: '1', limit: String(TABLE_PAGE_SIZE), offset: String(page * TABLE_PAGE_SIZE) });
+    const to = toTime(); if (to) p.set('to', to);
+    if (taskId) p.set('task_id', taskId);
+    return p.toString();
+  };
+  const { data: tableData } = useQuery({
+    queryKey: ['table', taskId, timeRange, customFrom, customTo, page],
+    queryFn: () => api.getResults(tableParams()),
+    refetchInterval: refresh,
   });
 
   const { data: tasksData } = useQuery({
@@ -135,6 +154,8 @@ export default function Results() {
 
   const resultsDesc: ProbeResult[] = data?.data ?? [];
   const resultsAsc: ProbeResult[] = [...resultsDesc].reverse();
+  const tableRows: ProbeResult[] = tableData?.data ?? [];
+  const tableTotal: number = tableData?.meta?.total ?? 0;
   const tasks: Task[] = tasksData?.data ?? [];
   const latestResults: ProbeResult[] = latestData?.data ?? [];
 
@@ -319,10 +340,9 @@ export default function Results() {
 
   const hasAnyData = resultsDesc.length > 0;
 
-  // 表格分页：切换任务/时间范围时回到第一页；数据刷新变少时 clamp 当前页
+  // 表格服务端分页：切换任务/时间范围时回到第一页
   useEffect(() => { setPage(0); }, [taskId, timeRange, customFrom, customTo]);
-  const PAGE_SIZE = 100;
-  const totalPages = Math.max(1, Math.ceil(resultsDesc.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(tableTotal / TABLE_PAGE_SIZE));
   const curPage = Math.min(page, totalPages - 1);
 
   const queryClient = useQueryClient();
@@ -603,7 +623,7 @@ export default function Results() {
                 </tr>
               </thead>
               <tbody>
-                {resultsDesc.slice(curPage * PAGE_SIZE, curPage * PAGE_SIZE + PAGE_SIZE).map((r) => {
+                {tableRows.map((r) => {
                   const task = taskMap.get(r.task_id);
                   const extra = (r.extra ?? {}) as Record<string, any>;
                   return (
@@ -644,12 +664,12 @@ export default function Results() {
                 })}
               </tbody>
             </table>
-            {resultsDesc.length === 0 && <p style={{ padding: '2rem', textAlign: 'center', color: '#6b7280' }}>No results for this filter</p>}
+            {tableRows.length === 0 && <p style={{ padding: '2rem', textAlign: 'center', color: '#6b7280' }}>No results for this filter</p>}
           </div>
           {totalPages > 1 && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', marginTop: '0.5rem', fontSize: '0.8rem', color: '#374151' }}>
               <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={curPage === 0} style={pageBtnStyle}>← 上一页</button>
-              <span>第 {curPage + 1} / {totalPages} 页（共 {resultsDesc.length} 行，每页 {PAGE_SIZE}）</span>
+              <span>第 {curPage + 1} / {totalPages} 页（共 {tableTotal} 行，每页 {TABLE_PAGE_SIZE}）</span>
               <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={curPage >= totalPages - 1} style={pageBtnStyle}>下一页 →</button>
             </div>
           )}

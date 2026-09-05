@@ -113,6 +113,7 @@ func (s *Server) setupRoutes() {
 
 		// Results
 		r.Get("/results", resultH.Query)
+		r.Get("/results/aggregate", resultH.Aggregate)
 		r.Get("/results/summary", resultH.Summary)
 		r.Get("/results/latest", resultH.Latest)
 		r.Delete("/results", resultH.Clear)
