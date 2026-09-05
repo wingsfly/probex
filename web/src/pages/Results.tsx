@@ -76,6 +76,8 @@ const STANDARD_FIELDS: { key: keyof ProbeResult; label: string; unit: string; fm
 
 export default function Results() {
   const [taskId, setTaskId] = useState('');
+  const [agentId, setAgentId] = useState(''); // filter by client (agent_id)
+  const [nodeId, setNodeId] = useState('');   // filter by page/tab (node_id) of that client
   const [timeRange, setTimeRange] = useState('1h');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -120,10 +122,12 @@ export default function Results() {
     const p = new URLSearchParams({ from: fromTime(), slim: '1', points: '800' });
     const to = toTime(); if (to) p.set('to', to);
     if (taskId) p.set('task_id', taskId);
+    if (agentId) p.set('agent_id', agentId);
+    if (nodeId) p.set('node_id', nodeId);
     return p.toString();
   };
   const { data, isLoading } = useQuery({
-    queryKey: ['chart', taskId, timeRange, customFrom, customTo],
+    queryKey: ['chart', taskId, agentId, nodeId, timeRange, customFrom, customTo],
     queryFn: () => api.getResultsAggregate(chartParams()),
     refetchInterval: refresh,
   });
@@ -133,13 +137,31 @@ export default function Results() {
     const p = new URLSearchParams({ from: fromTime(), slim: '1', limit: String(TABLE_PAGE_SIZE), offset: String(page * TABLE_PAGE_SIZE) });
     const to = toTime(); if (to) p.set('to', to);
     if (taskId) p.set('task_id', taskId);
+    if (agentId) p.set('agent_id', agentId);
+    if (nodeId) p.set('node_id', nodeId);
     return p.toString();
   };
   const { data: tableData } = useQuery({
-    queryKey: ['table', taskId, timeRange, customFrom, customTo, page],
+    queryKey: ['table', taskId, agentId, nodeId, timeRange, customFrom, customTo, page],
     queryFn: () => api.getResults(tableParams()),
     refetchInterval: refresh,
   });
+
+  // Distinct clients (agent_id) for the selected task, and pages (node_id) for the
+  // selected client — to populate the Agent / Page filters. Bounded to last 24h.
+  const { data: dimData } = useQuery({
+    queryKey: ['dimensions', taskId, agentId],
+    queryFn: () => {
+      const p = new URLSearchParams();
+      if (taskId) p.set('task_id', taskId);
+      if (agentId) p.set('agent_id', agentId);
+      return api.getResultDimensions(p.toString());
+    },
+    enabled: !!taskId,
+    refetchInterval: refresh,
+  });
+  const agentOptions: string[] = dimData?.agents ?? [];
+  const nodeOptions: string[] = dimData?.nodes ?? [];
 
   const { data: tasksData } = useQuery({
     queryKey: ['tasks'],
@@ -369,7 +391,7 @@ export default function Results() {
   const hasAnyData = resultsDesc.length > 0;
 
   // 表格服务端分页：切换任务/时间范围时回到第一页
-  useEffect(() => { setPage(0); }, [taskId, timeRange, customFrom, customTo]);
+  useEffect(() => { setPage(0); }, [taskId, agentId, nodeId, timeRange, customFrom, customTo]);
   const totalPages = Math.max(1, Math.ceil(tableTotal / TABLE_PAGE_SIZE));
   const curPage = Math.min(page, totalPages - 1);
 
@@ -521,6 +543,7 @@ export default function Results() {
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
         <select value={taskId} onChange={e => {
           setTaskId(e.target.value);
+          setAgentId(''); setNodeId('');
           appliedDefaultHiddenKeys.current.clear();
           setHiddenLines(new Set(DEFAULT_HIDDEN_LINES));
         }} style={selectStyle}>
@@ -537,6 +560,20 @@ export default function Results() {
             ));
           })()}
         </select>
+        {taskId && agentOptions.length > 0 && (
+          <select value={agentId} onChange={e => { setAgentId(e.target.value); setNodeId(''); }}
+            style={selectStyle} title="按客户端(agent_id)过滤">
+            <option value="">All clients ({agentOptions.length})</option>
+            {agentOptions.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        )}
+        {agentId && nodeOptions.length > 0 && (
+          <select value={nodeId} onChange={e => setNodeId(e.target.value)}
+            style={selectStyle} title="按页面/标签页(node_id)过滤">
+            <option value="">All pages ({nodeOptions.length})</option>
+            {nodeOptions.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        )}
         <select value={timeRange} onChange={e => setTimeRange(e.target.value)} style={selectStyle}>
           <option value="1h">Last 1 hour</option>
           <option value="6h">Last 6 hours</option>

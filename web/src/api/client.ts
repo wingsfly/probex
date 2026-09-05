@@ -33,6 +33,8 @@ export const api = {
     request<any>(`/results${params ? '?' + params : ''}`),
   getResultsAggregate: (params?: string) =>
     request<any>(`/results/aggregate${params ? '?' + params : ''}`),
+  getResultDimensions: (params?: string) =>
+    request<{ agents: string[]; nodes: string[] }>(`/results/dimensions${params ? '?' + params : ''}`),
   getResultSummary: (params?: string) =>
     request<any>(`/results/summary${params ? '?' + params : ''}`),
   getLatestResults: () => request<any>('/results/latest'),

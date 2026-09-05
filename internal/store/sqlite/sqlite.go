@@ -221,6 +221,43 @@ func (s *SQLiteStore) QueryResults(ctx context.Context, f model.ResultFilter) ([
 	return results, total, rows.Err()
 }
 
+// ResultDimensions lists distinct agent_ids (and, if agentID given, node_ids)
+// seen for a task within the last 24h — for populating the Results filters.
+// Bounded to a recent window so it stays cheap and reflects who is pushing now.
+func (s *SQLiteStore) ResultDimensions(ctx context.Context, taskID, agentID string) ([]string, []string, error) {
+	since := time.Now().Add(-24 * time.Hour).UnixMilli()
+	distinct := func(col, extraCond string, extraArgs ...any) ([]string, error) {
+		q := "SELECT DISTINCT " + col + " FROM probe_results WHERE task_id = ? AND timestamp >= ? AND " + col + " != ''" + extraCond + " ORDER BY " + col
+		args := append([]any{taskID, since}, extraArgs...)
+		rows, err := s.db.QueryContext(ctx, q, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var v string
+			if err := rows.Scan(&v); err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		}
+		return out, rows.Err()
+	}
+	agents, err := distinct("agent_id", "")
+	if err != nil {
+		return nil, nil, err
+	}
+	var nodes []string
+	if agentID != "" {
+		nodes, err = distinct("node_id", " AND agent_id = ?", agentID)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return agents, nodes, nil
+}
+
 func (s *SQLiteStore) GetResultSummary(ctx context.Context, f model.ResultFilter) (*model.ResultSummary, error) {
 	where, args := buildResultWhere(f)
 	row := s.db.QueryRowContext(ctx, `
@@ -737,6 +774,10 @@ func buildResultWhere(f model.ResultFilter) (string, []any) {
 	if f.AgentID != "" {
 		conds = append(conds, "agent_id = ?")
 		args = append(args, f.AgentID)
+	}
+	if f.NodeID != "" {
+		conds = append(conds, "node_id = ?")
+		args = append(args, f.NodeID)
 	}
 	if !f.From.IsZero() {
 		conds = append(conds, "timestamp >= ?")

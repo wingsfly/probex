@@ -27,6 +27,7 @@ type ProbeResult struct {
 type ResultFilter struct {
 	TaskID  string
 	AgentID string
+	NodeID  string
 	From    time.Time
 	To      time.Time
 	Limit   int
