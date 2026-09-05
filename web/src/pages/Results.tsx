@@ -160,8 +160,8 @@ export default function Results() {
     enabled: !!taskId,
     refetchInterval: refresh,
   });
-  const agentOptions: string[] = dimData?.agents ?? [];
-  const nodeOptions: string[] = dimData?.nodes ?? [];
+  const agentOptions: string[] = dimData?.data?.agents ?? [];
+  const nodeOptions: string[] = dimData?.data?.nodes ?? [];
 
   const { data: tasksData } = useQuery({
     queryKey: ['tasks'],
