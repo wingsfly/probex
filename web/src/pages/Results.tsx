@@ -174,10 +174,14 @@ export default function Results() {
     queryFn: () => api.getProbes(),
   });
 
-  // Fetch latest results (one per task) to discover ALL task_ids including external probes
+  // Fetch latest results (one per task) to discover ALL task_ids including external
+  // probes. Refetch on the refresh interval so a probe that starts pushing AFTER
+  // the page was opened (e.g. a new client/node) shows up in the task dropdown
+  // without a manual page reload.
   const { data: latestData } = useQuery({
     queryKey: ['latestResults'],
     queryFn: api.getLatestResults,
+    refetchInterval: refresh,
   });
 
   const resultsDesc: ProbeResult[] = data?.data ?? [];
