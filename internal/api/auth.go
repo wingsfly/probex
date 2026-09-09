@@ -56,8 +56,22 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	writeData(w, map[string]string{"token": makeToken(s.authPassword, exp)})
 }
 
+// isIngestPath reports whether a request is a probe data-ingest call
+// (POST /probes/register or POST /probes/{name}/push). These may be authorized
+// by an ingest token instead of a login session, so plugins/agents can report.
+func isIngestPath(method, path string) bool {
+	if method != http.MethodPost {
+		return false
+	}
+	if path == "/api/v1/probes/register" {
+		return true
+	}
+	return strings.HasPrefix(path, "/api/v1/probes/") && strings.HasSuffix(path, "/push")
+}
+
 // authMiddleware rejects requests without a valid bearer token. The public
-// endpoints /api/v1/mode and /api/v1/login pass through untouched.
+// endpoints /api/v1/mode and /api/v1/login pass through untouched. Probe-ingest
+// endpoints also accept a valid X-Ingest-Token (see isIngestPath).
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -66,6 +80,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if r.Method == http.MethodOptions { // let CORS preflight through
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Ingest endpoints: a valid ingest token authorizes reporting without login.
+		if s.ingestToken != "" && isIngestPath(r.Method, r.URL.Path) &&
+			subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Ingest-Token")), []byte(s.ingestToken)) == 1 {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -24,6 +24,7 @@ type Server struct {
 	allowedNetworks []string
 	scriptDir       string // for script-probe rescan
 	authPassword    string // if set, /api/v1 (except /mode and /login) requires a bearer token
+	ingestToken     string // if set, probe-ingest endpoints also accept X-Ingest-Token
 }
 
 // ServerOption allows optional configuration of the server.
@@ -47,6 +48,13 @@ func WithScriptDir(dir string) ServerOption {
 // WithAuthPassword enables login-based auth. Empty string leaves auth disabled.
 func WithAuthPassword(pw string) ServerOption {
 	return func(s *Server) { s.authPassword = pw }
+}
+
+// WithIngestToken lets probe-ingest endpoints be authorized by a shared token
+// (header X-Ingest-Token) instead of a login session. Only relevant when auth
+// is enabled. Empty string disables the token path.
+func WithIngestToken(tok string) ServerOption {
+	return func(s *Server) { s.ingestToken = tok }
 }
 
 func NewServer(s store.Store, notifier TaskNotifier, registry *probe.Registry, gen *report.Generator, alertEval AlertEvaluator, opts ...ServerOption) *Server {
@@ -88,7 +96,7 @@ func (s *Server) setupRoutes() {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Ingest-Token"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
