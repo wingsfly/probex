@@ -9,6 +9,7 @@ import Heatmap from './pages/Heatmap'
 import Reports from './pages/Reports'
 import Alerts from './pages/Alerts'
 import Agents from './pages/Agents'
+import { getToken, clearToken } from './api/auth'
 
 const navItems = [
   { path: '/', label: 'Overview', section: 'monitor' },
@@ -65,6 +66,18 @@ export default function App() {
             </div>
           ))}
         </nav>
+        {getToken() && (
+          <button
+            onClick={() => { clearToken(); window.location.reload() }}
+            style={{
+              margin: '1.5rem 1.5rem 0', padding: '0.4rem', fontSize: '0.75rem',
+              color: '#94a3b8', background: 'transparent', border: '1px solid #334155',
+              borderRadius: 6, cursor: 'pointer',
+            }}
+          >
+            退出登录
+          </button>
+        )}
       </aside>
 
       <main style={{ flex: 1, padding: '1.5rem 2rem', maxWidth: 1400 }}>

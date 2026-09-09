@@ -23,6 +23,7 @@ type Server struct {
 	mode            string // "standalone", "hub", "agent"
 	allowedNetworks []string
 	scriptDir       string // for script-probe rescan
+	authPassword    string // if set, /api/v1 (except /mode and /login) requires a bearer token
 }
 
 // ServerOption allows optional configuration of the server.
@@ -41,6 +42,11 @@ func WithAllowedNetworks(cidrs []string) ServerOption {
 // WithScriptDir sets the script-probe directory so the API can rescan it.
 func WithScriptDir(dir string) ServerOption {
 	return func(s *Server) { s.scriptDir = dir }
+}
+
+// WithAuthPassword enables login-based auth. Empty string leaves auth disabled.
+func WithAuthPassword(pw string) ServerOption {
+	return func(s *Server) { s.authPassword = pw }
 }
 
 func NewServer(s store.Store, notifier TaskNotifier, registry *probe.Registry, gen *report.Generator, alertEval AlertEvaluator, opts ...ServerOption) *Server {
@@ -96,9 +102,16 @@ func (s *Server) setupRoutes() {
 	probeH := NewProbeHandler(s.registry, s.store, s.alertEval, s.scriptDir)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Mode info
+		// Auth gate (skips /mode and /login internally). Must be registered
+		// before any routes on this group per chi's middleware rules.
+		if s.authPassword != "" {
+			r.Use(s.authMiddleware)
+			r.Post("/login", s.login)
+		}
+
+		// Mode info — always open; also tells the UI whether login is required.
 		r.Get("/mode", func(w http.ResponseWriter, r *http.Request) {
-			writeData(w, map[string]string{"mode": s.mode})
+			writeData(w, map[string]any{"mode": s.mode, "auth_required": s.authPassword != ""})
 		})
 
 		// Tasks

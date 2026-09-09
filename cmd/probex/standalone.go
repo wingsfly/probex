@@ -104,6 +104,7 @@ func runStandalone() error {
 		api.WithMode("standalone"),
 		api.WithAllowedNetworks(cfg.Server.AllowedNetworks),
 		api.WithScriptDir(cfg.Probe.ScriptDir),
+		api.WithAuthPassword(os.Getenv("PROBEX_AUTH_PASSWORD")),
 	)
 
 	httpServer := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: srv.Handler()}

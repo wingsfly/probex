@@ -1,10 +1,23 @@
+import { getToken, clearToken } from './auth';
+
 const BASE_URL = '/api/v1';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getToken();
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
     ...options,
   });
+  if (res.status === 401) {
+    // Token missing/expired — drop it and force the login gate to reappear.
+    clearToken();
+    window.location.reload();
+    throw new Error('unauthorized');
+  }
   const json = await res.json();
   if (json.error) throw new Error(json.error);
   return json;
@@ -59,8 +72,12 @@ export const api = {
     request<any>('/reports', { method: 'POST', body: JSON.stringify(body) }),
   deleteReport: (id: string) =>
     request<any>(`/reports/${id}`, { method: 'DELETE' }),
-  downloadReport: (id: string) =>
-    fetch(`${BASE_URL}/reports/${id}/download`).then(res => res.blob()),
+  downloadReport: (id: string) => {
+    const token = getToken();
+    return fetch(`${BASE_URL}/reports/${id}/download`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }).then(res => res.blob());
+  },
 
   // Alert Rules
   getAlertRules: () => request<any>('/alerts/rules'),
