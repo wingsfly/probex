@@ -169,29 +169,53 @@ func (s *SQLiteStore) InsertResult(ctx context.Context, r *model.ProbeResult) er
 }
 
 func (s *SQLiteStore) InsertResults(ctx context.Context, results []*model.ProbeResult) error {
+	_, err := s.insertResults(ctx, results, false)
+	return err
+}
+
+func (s *SQLiteStore) InsertResultsIfAbsent(ctx context.Context, results []*model.ProbeResult) ([]*model.ProbeResult, error) {
+	return s.insertResults(ctx, results, true)
+}
+
+func (s *SQLiteStore) insertResults(ctx context.Context, results []*model.ProbeResult, ignoreDuplicates bool) ([]*model.ProbeResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO probe_results (id, task_id, agent_id, node_id, timestamp, success, latency_ms, jitter_ms, packet_loss_pct, dns_resolve_ms, tls_handshake_ms, status_code, download_bps, upload_bps, error, extra)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	query := `INSERT INTO probe_results (id, task_id, agent_id, node_id, timestamp, success, latency_ms, jitter_ms, packet_loss_pct, dns_resolve_ms, tls_handshake_ms, status_code, download_bps, upload_bps, error, extra)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	if ignoreDuplicates {
+		query += " ON CONFLICT(id) DO NOTHING"
+	}
+	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer stmt.Close()
+	var inserted []*model.ProbeResult
 	for _, r := range results {
-		if _, err := stmt.ExecContext(ctx, r.ID, r.TaskID, r.AgentID, r.NodeID, r.Timestamp.UnixMilli(),
+		res, err := stmt.ExecContext(ctx, r.ID, r.TaskID, r.AgentID, r.NodeID, r.Timestamp.UnixMilli(),
 			boolToInt(r.Success), r.LatencyMs,
 			r.JitterMs, r.PacketLossPct, r.DNSResolveMs, r.TLSHandshakeMs,
 			r.StatusCode, r.DownloadBps, r.UploadBps,
 			nullStr(r.Error), nullJSON(r.Extra),
-		); err != nil {
-			return err
+		)
+		if err != nil {
+			return nil, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			inserted = append(inserted, r)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return inserted, nil
 }
 
 func (s *SQLiteStore) QueryResults(ctx context.Context, f model.ResultFilter) ([]*model.ProbeResult, int, error) {

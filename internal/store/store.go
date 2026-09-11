@@ -25,6 +25,8 @@ type Store interface {
 	// Result operations
 	InsertResult(ctx context.Context, result *model.ProbeResult) error
 	InsertResults(ctx context.Context, results []*model.ProbeResult) error
+	// InsertResultsIfAbsent atomically inserts unseen IDs and returns only new rows.
+	InsertResultsIfAbsent(ctx context.Context, results []*model.ProbeResult) ([]*model.ProbeResult, error)
 	QueryResults(ctx context.Context, filter model.ResultFilter) ([]*model.ProbeResult, int, error)
 	// ResultDimensions returns the distinct agent_ids for a task (recent window)
 	// and, when agentID is given, the distinct node_ids for that task+agent.

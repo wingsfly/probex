@@ -1,9 +1,12 @@
 package api
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -152,6 +155,16 @@ func (h *ProbeHandler) PushResults(w http.ResponseWriter, r *http.Request) {
 
 	var results []*model.ProbeResult
 	for _, res := range req.Results {
+		if len(res.ResultID) > 128 || (res.ResultID != "" && strings.TrimSpace(res.ResultID) == "") {
+			writeError(w, http.StatusBadRequest, "result_id must be non-blank and at most 128 bytes")
+			return
+		}
+		id := generateID()
+		if res.ResultID != "" {
+			// Scope client IDs so different probes, agents and pages cannot collide.
+			scope, _ := json.Marshal([]string{name, taskID, agentID, nodeID, res.ResultID})
+			id = fmt.Sprintf("ext_%x", sha256.Sum256(scope))
+		}
 		ts := now
 		if res.Timestamp != nil {
 			if t, err := time.Parse(time.RFC3339, *res.Timestamp); err == nil {
@@ -159,7 +172,7 @@ func (h *ProbeHandler) PushResults(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		pr := &model.ProbeResult{
-			ID:             generateID(),
+			ID:             id,
 			TaskID:         taskID,
 			AgentID:        agentID,
 			NodeID:         nodeID,
@@ -179,19 +192,22 @@ func (h *ProbeHandler) PushResults(w http.ResponseWriter, r *http.Request) {
 		results = append(results, pr)
 	}
 
+	var inserted []*model.ProbeResult
 	if len(results) > 0 {
-		if err := h.store.InsertResults(r.Context(), results); err != nil {
+		var err error
+		inserted, err = h.store.InsertResultsIfAbsent(r.Context(), results)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// Evaluate alerts
 		if h.alertEval != nil {
-			for _, pr := range results {
+			for _, pr := range inserted {
 				h.alertEval.Evaluate(pr)
 			}
 		}
 	}
 
 	h.store.UpdateProbeLastPush(r.Context(), name, now)
-	writeData(w, map[string]int{"accepted": len(results)})
+	writeData(w, map[string]int{"accepted": len(results), "inserted": len(inserted), "duplicates": len(results) - len(inserted)})
 }

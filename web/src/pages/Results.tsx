@@ -2,6 +2,10 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { ProbeMetadata, ProbeResult, Task } from '../types/api';
+import GuideXTimeline from '../components/GuideXTimeline';
+import { clientOptions } from '../lib/client-options';
+import { loadResultExport, resultExportFields } from '../lib/results-export';
+import { GUIDEX_CHART_KEYS, GUIDEX_INTERVAL_FIELDS, GUIDEX_LABELS, GUIDEX_STAGES, guidexChartFields, guidexFieldOrder, guidexSortFields, guidexSource, guidexStartBy, guidexStatus, guidexTimingEligible } from '../lib/guidex-timeline';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
@@ -47,7 +51,7 @@ const FIELD_DICT: Record<string, [string, string]> = {
   'av_sync_diff_ms': ['AV Sync', '音视频同步偏差(ms)。计算: 最新videoJB - 最新audioJB（跨PC聚合，因Guidex音频和视频分别在不同PeerConnection上）。正值=视频比音频延迟更大'],
   'connection_count': ['Conns', '活跃PeerConnection数量'],
 };
-const getShortName = (raw: string) => FIELD_DICT[raw]?.[0] ?? raw;
+const getDefaultShortName = (raw: string) => FIELD_DICT[raw]?.[0] ?? raw;
 
 // sheetjs-style is loaded dynamically on export to avoid blocking page render
 
@@ -84,6 +88,7 @@ export default function Results() {
   const [customTo, setCustomTo] = useState('');
   const [hiddenLines, setHiddenLines] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN_LINES));
   const [page, setPage] = useState(0);
+  const [exporting, setExporting] = useState(false);
   // schema-driven default-hidden lines (probe output_schema extra_fields[].default_hidden),
   // applied once per key on top of the DEFAULT_HIDDEN_LINES fallback
   const appliedDefaultHiddenKeys = useRef(new Set<string>());
@@ -184,13 +189,19 @@ export default function Results() {
     refetchInterval: refresh,
   });
 
-  const resultsDesc: ProbeResult[] = data?.data ?? [];
-  const resultsAsc: ProbeResult[] = [...resultsDesc].reverse();
-  const tableRows: ProbeResult[] = tableData?.data ?? [];
   const tableTotal: number = tableData?.meta?.total ?? 0;
   const tasks: Task[] = tasksData?.data ?? [];
   const probes: ProbeMetadata[] = probesData?.data ?? [];
   const latestResults: ProbeResult[] = latestData?.data ?? [];
+  const clients = clientOptions(agentOptions, taskId, tasks, latestResults, probes);
+  const isGuideX = taskId === 'ext_guidex-runtime-v4' ||
+    (!!taskId && tasks.find(task => task.id === taskId)?.probe_type === 'guidex-runtime-v4');
+  // The API excludes normal closures before aggregation; bucket statuses are
+  // not per-turn outcomes and must not be reclassified here.
+  const resultsDesc: ProbeResult[] = data?.data ?? [];
+  const resultsAsc: ProbeResult[] = [...resultsDesc].reverse();
+  const tableRows: ProbeResult[] = tableData?.data ?? [];
+  const getShortName = (raw: string) => isGuideX ? GUIDEX_LABELS[raw] ?? raw : getDefaultShortName(raw);
 
   const taskMap = useMemo(() => {
     const m = new Map<string, Task>();
@@ -198,40 +209,58 @@ export default function Results() {
     return m;
   }, [tasks]);
 
+  const guideXRows = useMemo(() => {
+    const isRuntimeV4 = (row: ProbeResult) =>
+      row.task_id === 'ext_guidex-runtime-v4' ||
+      row.extra?.client_adapter === 'guidex-runtime-v4' ||
+      taskMap.get(row.task_id)?.probe_type === 'guidex-runtime-v4';
+    return tableRows.filter(row => isRuntimeV4(row) && guidexTimingEligible(row));
+  }, [tableRows, taskMap]);
+
   // --- Auto-detect which fields are present in the data ---
   // A field is "present" if at least one result has a non-null, non-zero value for it.
   // This avoids showing columns like latency_ms=0 when the probe doesn't produce that metric.
   const presentStdFields = useMemo(() =>
-    STANDARD_FIELDS.filter(f => resultsDesc.some(r => {
+    STANDARD_FIELDS.filter(f => !(isGuideX && f.key === 'latency_ms') && [...resultsDesc, ...tableRows].some(r => {
       const v = (r as any)[f.key];
       return v != null && v !== 0;
     })),
-    [resultsDesc]
+    [resultsDesc, tableRows, isGuideX]
   );
 
   // Detect extra fields present in results (all types for table, numeric for charts)
   const presentExtraFields = useMemo(() => {
     // 这些诊断字段即使全程为 0 也保留列，便于确认探针在测（乱序/丢包），而不是靠列的有无来猜
-    const ALWAYS_SHOW = new Set(['out_of_order', 'out_of_order_pct', 'lost_percent']);
+    const ALWAYS_SHOW = new Set(['out_of_order', 'out_of_order_pct', 'lost_percent',
+      ...(isGuideX ? [
+        ...GUIDEX_STAGES.map(([key]) => key),
+        ...GUIDEX_INTERVAL_FIELDS.map(([key]) => key),
+      ] : [])]);
     const allKeys = new Set<string>();
-    resultsDesc.forEach(r => {
+    if (isGuideX) {
+      // Keep the v4 interval vocabulary visible when a range has no
+      // matching event, such as Interrupt_ACK on normal turns.
+      GUIDEX_INTERVAL_FIELDS.forEach(([key]) => allKeys.add(key));
+    }
+    [...resultsDesc, ...tableRows].forEach(r => {
       if (r.extra) Object.keys(r.extra).forEach(k => {
         const v = (r.extra as any)[k];
         // 排除数组/对象（如 iperf3 intervals 明细），否则会渲染成 [object Object]；全 0 字段默认隐藏，但白名单诊断字段始终显示
         if (v != null && v !== '' && typeof v !== 'object' && (v !== 0 || ALWAYS_SHOW.has(k))) allKeys.add(k);
       });
     });
-    return [...allKeys].sort();
-  }, [resultsDesc]);
+    const keys = [...allKeys].sort();
+    return isGuideX ? guidexSortFields(keys) : keys;
+  }, [resultsDesc, tableRows, isGuideX]);
 
   // Numeric-only extra fields (for chart lines)
   // 乱序率/丢包率是诊断指标，即使全程为 0 也保留为可选图例项（默认显示，见 hiddenLines 初值）
   const CHART_ALWAYS_LINE = new Set(['out_of_order_pct', 'lost_percent']);
   const numericExtraFields = useMemo(() =>
-    presentExtraFields.filter(k =>
+    isGuideX ? guidexChartFields(presentExtraFields) : presentExtraFields.filter(k =>
       resultsDesc.some(r => r.extra && typeof (r.extra as any)[k] === 'number' && ((r.extra as any)[k] !== 0 || CHART_ALWAYS_LINE.has(k)))
     ),
-    [presentExtraFields, resultsDesc]
+    [presentExtraFields, resultsDesc, isGuideX]
   );
 
   // Chartable fields: all numeric standard fields + all numeric extra fields
@@ -252,9 +281,10 @@ export default function Results() {
       ?? (activeTaskId.startsWith('ext_') ? activeTaskId.slice('ext_'.length) : '');
     const metadata = probes.find(probe => probe.name === probeName);
     return metadata?.output_schema?.extra_fields
-      ?.filter(field => field.default_hidden)
+      ?.filter(field => field.default_hidden &&
+        !(isGuideX && GUIDEX_CHART_KEYS.has(field.name)))
       .map(field => field.name) ?? [];
-  }, [taskId, involvedTaskIds, taskMap, probes]);
+  }, [taskId, involvedTaskIds, taskMap, probes, isGuideX]);
 
   const isMultiTask = !taskId && involvedTaskIds.length > 1;
 
@@ -380,7 +410,7 @@ export default function Results() {
       lines.push({ key: `extra:${k}`, name: getShortName(k), color: EXTRA_COLORS[ci++ % EXTRA_COLORS.length], yAxisId });
     });
     return lines;
-  }, [chartableStdFields, presentExtraFields]);
+  }, [chartableStdFields, numericExtraFields, isGuideX]);
 
   // Apply schema-driven default-hidden lines once each (on top of DEFAULT_HIDDEN_LINES fallback)
   useEffect(() => {
@@ -424,128 +454,148 @@ export default function Results() {
       const key = f.label;
       return !hiddenLines.has(key) && f.key !== 'download_bps' && f.key !== 'upload_bps';
     });
-    if (visibleStd.length === 0) return '';
+    if (visibleStd.length === 0) return isGuideX ? 'ms' : '';
     const units = new Set(visibleStd.map(f => f.unit));
     return units.size === 1 ? [...units][0] : '';
-  }, [chartableStdFields, hiddenLines]);
+  }, [chartableStdFields, hiddenLines, isGuideX]);
 
   // ---- Export: chart PNG + data Excel ----
   const handleExport = async () => {
-    let XLSX: any;
+    if (exporting) return;
+    setExporting(true);
     try {
-      const mod = await import('xlsx');
-      XLSX = mod.default || mod;
-    } catch (e) {
-      console.error('Failed to load xlsx:', e);
-      alert('Export module failed to load.');
-      return;
-    }
-    const taskLabel = taskId ? (taskMap.get(taskId)?.name ?? taskId).replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
-    const now = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
-    const baseName = `probex-${taskLabel}-${timeRange}-${now}`;
-
-    // 1. Export chart as PNG
-    const svgEl = document.querySelector('.recharts-responsive-container svg') as SVGSVGElement | null;
-    if (svgEl) {
+      const exportRows = await loadResultExport(api.getResults, tableParams());
+      const exportExtraFields = resultExportFields(exportRows, presentExtraFields, isGuideX);
+      const exportStdFields = STANDARD_FIELDS.filter(f => !(isGuideX && f.key === 'latency_ms') &&
+        exportRows.some(row => row[f.key] != null && row[f.key] !== 0));
+      const exportMultiTask = !taskId;
+      let XLSX: any;
       try {
-        const svgData = new XMLSerializer().serializeToString(svgEl);
-        const rect = svgEl.getBoundingClientRect();
-        const scale = 2;
-        const canvas = document.createElement('canvas');
-        canvas.width = rect.width * scale;
-        canvas.height = rect.height * scale;
-        const ctx = canvas.getContext('2d')!;
-        ctx.scale(scale, scale);
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, rect.width, rect.height);
-        const img = new Image();
-        const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        await new Promise<void>((resolve) => {
-          img.onload = () => { ctx.drawImage(img, 0, 0, rect.width, rect.height); URL.revokeObjectURL(url); resolve(); };
-          img.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-          img.src = url;
-        });
-        canvas.toBlob((pngBlob) => {
-          if (!pngBlob) return;
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(pngBlob);
-          a.download = baseName + '-chart.png';
-          a.click();
-          URL.revokeObjectURL(a.href);
-        }, 'image/png');
+        const mod = await import('xlsx');
+        XLSX = mod.default || mod;
       } catch (e) {
-        console.warn('Chart PNG export failed:', e);
+        console.error('Failed to load xlsx:', e);
+        alert('Export module failed to load.');
+        return;
       }
+      const taskLabel = taskId ? (taskMap.get(taskId)?.name ?? taskId).replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
+      const now = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
+      const baseName = `probex-${taskLabel}-${timeRange}-${now}`;
+
+      // 1. Export chart as PNG
+      const svgEl = document.querySelector('.results-chart .recharts-responsive-container svg') as SVGSVGElement | null;
+      if (svgEl) {
+        try {
+          const svgData = new XMLSerializer().serializeToString(svgEl);
+          const rect = svgEl.getBoundingClientRect();
+          const scale = 2;
+          const canvas = document.createElement('canvas');
+          canvas.width = rect.width * scale;
+          canvas.height = rect.height * scale;
+          const ctx = canvas.getContext('2d')!;
+          ctx.scale(scale, scale);
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, rect.width, rect.height);
+          const img = new Image();
+          const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          await new Promise<void>((resolve) => {
+            img.onload = () => { ctx.drawImage(img, 0, 0, rect.width, rect.height); URL.revokeObjectURL(url); resolve(); };
+            img.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+            img.src = url;
+          });
+          canvas.toBlob((pngBlob) => {
+            if (!pngBlob) return;
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(pngBlob);
+            a.download = baseName + '-chart.png';
+            a.click();
+            URL.revokeObjectURL(a.href);
+          }, 'image/png');
+        } catch (e) {
+          console.warn('Chart PNG export failed:', e);
+        }
+      }
+
+      // 2. Export data table as Excel
+      const wb = XLSX.utils.book_new();
+
+      const getDescription = (raw: string) => isGuideX
+        ? probes.find(probe => probe.name === 'guidex-runtime-v4')?.output_schema?.extra_fields?.find(field => field.name === raw)?.description ?? ''
+        : FIELD_DICT[raw]?.[1] ?? '';
+
+      // Build headers with short names
+      const rawHeaders: string[] = ['Time'];
+      if (exportMultiTask) rawHeaders.push('Task');
+      rawHeaders.push('Status');
+      exportStdFields.forEach(f => rawHeaders.push(f.label));
+      exportExtraFields.forEach(k => rawHeaders.push(k));
+      rawHeaders.push('Error');
+
+      const shortHeaders = rawHeaders.map(h => getShortName(h));
+
+      const dataRows = exportRows.map(r => {
+        const extra = (r.extra ?? {}) as Record<string, any>;
+        const row: any[] = [new Date(r.timestamp).toLocaleString()];
+        if (exportMultiTask) row.push(taskMap.get(r.task_id)?.name ?? r.task_id);
+        const runtimeRow = isGuideX || extra.client_adapter === 'guidex-runtime-v4' ||
+          r.task_id === 'ext_guidex-runtime-v4' || taskMap.get(r.task_id)?.probe_type === 'guidex-runtime-v4';
+        row.push(runtimeRow ? guidexStatus(r.success, extra).label : r.success ? 'OK' : 'FAIL');
+        exportStdFields.forEach(f => {
+          const v = (r as any)[f.key];
+          if (v == null) { row.push(''); return; }
+          if (f.key === 'download_bps' || f.key === 'upload_bps') row.push(Number((v / 1e6).toFixed(2)));
+          else if (typeof v === 'number') row.push(Number(v.toFixed(2)));
+          else row.push(v);
+        });
+        exportExtraFields.forEach(k => {
+          const v = extra[k];
+          if (v == null) row.push('');
+          else if (runtimeRow && k === 'start_by') row.push(guidexStartBy(v));
+          else if (runtimeRow && k === 'input_source') row.push(guidexSource(v));
+          else if (typeof v === 'number') row.push(Number(v % 1 === 0 ? v : Number(v.toFixed(2))));
+          else row.push(String(v));
+        });
+        row.push(r.error || '');
+        return row;
+      });
+
+      // Sheet 1: Results data with short column names
+      const ws = XLSX.utils.aoa_to_sheet([shortHeaders, ...dataRows]);
+      const dataWidths = shortHeaders.map((_h: string, i: number) => {
+        let max = _h.length;
+        dataRows.slice(0, 200).forEach((row: any[]) => {
+          const v = String(row[i] ?? '');
+          if (v.length > max) max = v.length;
+        });
+        return max;
+      });
+      ws['!cols'] = dataWidths.map((w: number) => ({ wch: Math.max(8, Math.min(w + 2, 24)) }));
+      XLSX.utils.book_append_sheet(wb, ws, 'Results');
+
+      // Sheet 2: Dictionary — explains each column
+      const dictRows = [['Column', 'Field Name', 'Description']];
+      rawHeaders.forEach((raw, i) => {
+        dictRows.push([shortHeaders[i], raw, getDescription(raw) || raw]);
+      });
+      const wsDict = XLSX.utils.aoa_to_sheet(dictRows);
+      wsDict['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 60 }];
+      XLSX.utils.book_append_sheet(wb, wsDict, 'Dictionary');
+
+      XLSX.writeFile(wb, baseName + '.xlsx');
+    } catch (error) {
+      console.error('Failed to export results:', error);
+      alert('Export failed. Please retry.');
+    } finally {
+      setExporting(false);
     }
-
-    // 2. Export data table as Excel
-    const wb = XLSX.utils.book_new();
-
-    const getDescription = (raw: string) => FIELD_DICT[raw]?.[1] ?? '';
-
-    // Build headers with short names
-    const rawHeaders: string[] = ['Time'];
-    if (isMultiTask) rawHeaders.push('Task');
-    rawHeaders.push('Status');
-    presentStdFields.forEach(f => rawHeaders.push(f.label));
-    presentExtraFields.forEach(k => rawHeaders.push(k));
-    rawHeaders.push('Error');
-
-    const shortHeaders = rawHeaders.map(h => getShortName(h));
-
-    const dataRows = resultsDesc.slice(0, 5000).map(r => {
-      const extra = (r.extra ?? {}) as Record<string, any>;
-      const row: any[] = [new Date(r.timestamp).toLocaleString()];
-      if (isMultiTask) row.push(taskMap.get(r.task_id)?.name ?? r.task_id);
-      row.push(r.success ? 'OK' : 'FAIL');
-      presentStdFields.forEach(f => {
-        const v = (r as any)[f.key];
-        if (v == null) { row.push(''); return; }
-        if (f.key === 'download_bps' || f.key === 'upload_bps') row.push(Number((v / 1e6).toFixed(2)));
-        else if (typeof v === 'number') row.push(Number(v.toFixed(2)));
-        else row.push(v);
-      });
-      presentExtraFields.forEach(k => {
-        const v = extra[k];
-        if (v == null) row.push('');
-        else if (typeof v === 'number') row.push(Number(v % 1 === 0 ? v : Number(v.toFixed(2))));
-        else row.push(String(v));
-      });
-      row.push(r.error || '');
-      return row;
-    });
-
-    // Sheet 1: Results data with short column names
-    const ws = XLSX.utils.aoa_to_sheet([shortHeaders, ...dataRows]);
-    const dataWidths = shortHeaders.map((_h: string, i: number) => {
-      let max = _h.length;
-      dataRows.slice(0, 200).forEach((row: any[]) => {
-        const v = String(row[i] ?? '');
-        if (v.length > max) max = v.length;
-      });
-      return max;
-    });
-    ws['!cols'] = dataWidths.map((w: number) => ({ wch: Math.max(8, Math.min(w + 2, 24)) }));
-    XLSX.utils.book_append_sheet(wb, ws, 'Results');
-
-    // Sheet 2: Dictionary — explains each column
-    const dictRows = [['Column', 'Field Name', 'Description']];
-    rawHeaders.forEach((raw, i) => {
-      dictRows.push([shortHeaders[i], raw, getDescription(raw) || raw]);
-    });
-    const wsDict = XLSX.utils.aoa_to_sheet(dictRows);
-    wsDict['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 60 }];
-    XLSX.utils.book_append_sheet(wb, wsDict, 'Dictionary');
-
-    XLSX.writeFile(wb, baseName + '.xlsx');
   };
 
   return (
     <div>
       <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1rem' }}>Results</h1>
 
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
         <select value={taskId} onChange={e => {
           setTaskId(e.target.value);
           setAgentId(''); setNodeId('');
@@ -567,9 +617,9 @@ export default function Results() {
         </select>
         {taskId && agentOptions.length > 0 && (
           <select value={agentId} onChange={e => { setAgentId(e.target.value); setNodeId(''); }}
-            style={selectStyle} title="按客户端(agent_id)过滤">
-            <option value="">All clients ({agentOptions.length})</option>
-            {agentOptions.map(a => <option key={a} value={a}>{a}</option>)}
+            style={selectStyle} aria-label="Client（Agent ID + Probe Name）" title="Agent ID + Probe Name（按 agent_id 过滤）">
+            <option value="">All clients ({clients.length})</option>
+            {clients.map(client => <option key={client.value} value={client.value} title={client.title}>{client.label}</option>)}
           </select>
         )}
         {agentId && nodeOptions.length > 0 && (
@@ -599,6 +649,11 @@ export default function Results() {
               title="To" />
           </>
         )}
+        {tableTotal > 0 && <button onClick={handleExport} disabled={exporting}
+          style={{ ...legendBtnStyle, background: '#059669', color: '#fff', border: 'none' }}
+          title="Export chart PNG (when available) and up to 5,000 raw records to Excel">
+          {exporting ? 'Exporting...' : 'Export'}
+        </button>}
         {taskId && (
           <button onClick={handleClear} disabled={clearMutation.isPending}
             style={{ padding: '0.5rem 0.75rem', border: '1px solid #fca5a5', borderRadius: 6, background: '#fff',
@@ -611,11 +666,11 @@ export default function Results() {
       {isLoading ? <p>Loading...</p> : (
         <>
           {/* Chart */}
-          {hasAnyData && (
+          {hasAnyData && (!isGuideX || numericExtraFields.length > 0) && (
             <div className="results-chart" style={{ background: '#fff', borderRadius: 8, padding: '1rem', border: '1px solid #e5e7eb', marginBottom: '1rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                 <h2 style={{ fontSize: '1rem', fontWeight: 500, margin: 0 }}>
-                  {isMultiTask ? 'Latency by Task' : 'Metrics Over Time'}
+                  {isMultiTask ? 'Latency by Task' : isGuideX ? 'Turn Timing' : 'Metrics Over Time'}
                 </h2>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <button onClick={() => setHiddenLines(new Set())}
@@ -630,9 +685,6 @@ export default function Results() {
                       return next;
                     });
                   }} style={legendBtnStyle} title="Invert selection">Invert</button>
-                  <button onClick={handleExport}
-                    style={{ ...legendBtnStyle, background: '#059669', color: '#fff', border: 'none' }}
-                    title="Export chart & table to Excel">Export</button>
                 </div>
               </div>
               <ResponsiveContainer width="100%" height={300}>
@@ -665,8 +717,10 @@ export default function Results() {
                       hide={!hasDefaultAxis} domain={['auto', 'auto']} />
                     <YAxis yAxisId="bps" orientation="right" tick={{ fontSize: 11 }} unit="Mbps"
                       hide={!hasBpsAxis} domain={['auto', 'auto']} />
-                    <Tooltip labelFormatter={(v) => typeof v === 'number' ? formatTooltipTime(v) : v} />
+                    <Tooltip labelFormatter={(v) => typeof v === 'number' ? formatTooltipTime(v) : v}
+                      itemSorter={isGuideX ? entry => guidexFieldOrder(String(entry.dataKey).replace(/^extra:/, '')) : undefined} />
                     <Legend onClick={(e) => toggleLine(e.dataKey as string)} wrapperStyle={{ cursor: 'pointer' }}
+                      itemSorter={isGuideX ? null : undefined}
                       formatter={(value, entry) => (
                         <span style={{
                           color: hiddenLines.has(entry.dataKey as string) ? '#d1d5db' : (entry.color ?? '#333'),
@@ -675,7 +729,7 @@ export default function Results() {
                       )} />
                     {chartLines.map(line => (
                       <Line key={line.key} type="monotone" dataKey={line.key} stroke={line.color}
-                        yAxisId={line.yAxisId} name={line.name} dot={false} hide={hiddenLines.has(line.key)} connectNulls />
+                        yAxisId={line.yAxisId} name={line.name} dot={isGuideX ? { r: 2 } : false} hide={hiddenLines.has(line.key)} connectNulls={!isGuideX} />
                     ))}
                   </LineChart>
                 )}
@@ -700,6 +754,10 @@ export default function Results() {
                 {tableRows.map((r) => {
                   const task = taskMap.get(r.task_id);
                   const extra = (r.extra ?? {}) as Record<string, any>;
+                  const runtimeRow = isGuideX || extra.client_adapter === 'guidex-runtime-v4' ||
+                    r.task_id === 'ext_guidex-runtime-v4' || task?.probe_type === 'guidex-runtime-v4';
+                  const status = runtimeRow ? guidexStatus(r.success, extra)
+                    : { label: r.success ? 'OK' : 'FAIL', color: r.success ? '#22c55e' : '#ef4444' };
                   return (
                     <tr key={r.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
                       <td style={tdStyle}>{new Date(r.timestamp).toLocaleTimeString()}</td>
@@ -714,8 +772,8 @@ export default function Results() {
                         </td>
                       )}
                       <td style={tdStyle}>
-                        <span style={{ color: r.success ? '#22c55e' : '#ef4444' }}>
-                          {r.success ? 'OK' : 'FAIL'}
+                        <span style={{ color: status.color }}>
+                          {status.label}
                         </span>
                       </td>
                       {presentStdFields.map(f => {
@@ -726,7 +784,9 @@ export default function Results() {
                         const v = extra[k];
                         let display = '-';
                         if (v != null) {
-                          if (typeof v === 'boolean') display = v ? 'Yes' : 'No';
+                          if (runtimeRow && k === 'input_source') display = guidexSource(v);
+                          else if (runtimeRow && k === 'start_by') display = guidexStartBy(v);
+                          else if (typeof v === 'boolean') display = v ? 'Yes' : 'No';
                           else if (typeof v === 'number') display = v % 1 === 0 ? String(v) : v.toFixed(2);
                           else display = String(v);
                         }
@@ -747,6 +807,7 @@ export default function Results() {
               <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={curPage >= totalPages - 1} style={pageBtnStyle}>下一页 →</button>
             </div>
           )}
+          {guideXRows.length > 0 && <GuideXTimeline results={guideXRows} />}
         </>
       )}
     </div>
@@ -805,7 +866,7 @@ function downsample<T>(arr: T[], maxPoints: number): T[] {
 
 const selectStyle: React.CSSProperties = {
   padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: 6,
-  fontSize: '0.875rem', background: '#fff',
+  fontSize: '0.875rem', background: '#fff', minWidth: 0, maxWidth: '100%',
 };
 const thStyle: React.CSSProperties = { padding: '0.75rem 0.5rem', fontWeight: 500 };
 const tdStyle: React.CSSProperties = { padding: '0.5rem' };

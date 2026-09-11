@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Client Filter Test</title></head>
+  <body style="margin: 12px; background: #f8fafc">
+    <p>Local synthetic data only. No API requests are sent.</p>
+    <button id="narrow">360px</button> <button id="wide">1000px</button>
+    <pre id="request" style="white-space: pre-wrap"></pre>
+    <div id="root" style="width: 1000px; max-width: 100%"></div>
+    <script type="module">
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+      import { api } from '/src/api/client.ts';
+      import Results from '/src/pages/Results.tsx';
+
+      for (const name of Object.keys(api)) api[name] = async () => { throw new Error(`Unexpected API: ${name}`); };
+      const rows = ['browser-a', 'browser-b', 'browser-unknown'].map((agent, i) => ({
+        id: agent, task_id: 'ext_guidex-runtime-v4', agent_id: agent, node_id: `page-${i}`,
+        timestamp: new Date().toISOString(), success: true, latency_ms: 50,
+        extra: { start_at: new Date().toISOString(), start_by: 'first_input', input_source: 'multimodal_box',
+          mic_ready: null, upload: 0, speech: 20, asr: 25, upload_end: 30, input_end: 31, asr_end: 32,
+          reply: 35, reply_end: 40, speak: 42, speak_end: 50, interrupt: null, interrupted: null, end: 50, completion_reason: 'completed' },
+      }));
+      const names = ['GuideX Macbook', 'Office browser with a very long descriptive Probe Name'];
+      const identityRows = names.map((name, i) => ({ ...rows[i], id: name, task_id: `ext_${name}` }));
+      api.getTasks = async () => ({ data: [] });
+      api.getProbes = async () => ({ data: names.map(name => ({ name, kind: 'external', output_schema: {
+        standard_fields: [], extra_fields: ['connection_count', 'audio_jitter', 'page_url'].map(name => ({ name })),
+      } })) });
+      api.getLatestResults = async () => ({ data: [...rows, ...identityRows] });
+      api.getResultDimensions = async params => {
+        const query = new URLSearchParams(params);
+        return { data: { agents: rows.map(row => row.agent_id),
+          nodes: rows.filter(row => row.agent_id === query.get('agent_id')).map(row => row.node_id) } };
+      };
+      const queryRows = async params => {
+        const query = new URLSearchParams(params);
+        const data = [...rows, ...identityRows].filter(row => ['task_id', 'agent_id', 'node_id'].every(key =>
+          !query.has(key) || row[key] === query.get(key)));
+        if (query.has('limit')) document.getElementById('request').textContent = JSON.stringify({
+          task_id: query.get('task_id'), agent_id: query.get('agent_id'), node_id: query.get('node_id'), rows: data.length,
+        });
+        return { data, meta: { total: data.length } };
+      };
+      api.getResults = queryRows;
+      api.getResultsAggregate = queryRows;
+      document.getElementById('narrow').onclick = () => { document.getElementById('root').style.width = '360px'; };
+      document.getElementById('wide').onclick = () => { document.getElementById('root').style.width = '1000px'; };
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      createRoot(document.getElementById('root')).render(React.createElement(QueryClientProvider, { client }, React.createElement(Results)));
+    </script>
+  </body>
+</html>

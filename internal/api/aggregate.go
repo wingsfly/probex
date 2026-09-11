@@ -29,6 +29,15 @@ func (h *ResultHandler) Aggregate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Filter raw rows before bucketing: a mixed bucket loses per-turn status and
+	// cannot be safely filtered by the browser after its timings have been averaged.
+	chartResults := make([]*model.ProbeResult, 0, len(results))
+	for _, result := range results {
+		if !isGuideXSessionClosure(result) {
+			chartResults = append(chartResults, result)
+		}
+	}
+	results = chartResults
 	points := 500
 	if p, e := strconv.Atoi(r.URL.Query().Get("points")); e == nil && p > 0 {
 		points = p
@@ -40,6 +49,21 @@ func (h *ResultHandler) Aggregate(w http.ResponseWriter, r *http.Request) {
 	// All Tasks: aggregate each task independently so multi-task latency lines
 	// stay separate and the payload stays small over slow links.
 	writeData(w, aggregateByTask(results, points))
+}
+
+func isGuideXSessionClosure(r *model.ProbeResult) bool {
+	if !r.Success || r.Error != "" {
+		return false
+	}
+	var extra struct {
+		Adapter string `json:"client_adapter"`
+		Reason  string `json:"completion_reason"`
+	}
+	if json.Unmarshal(r.Extra, &extra) != nil {
+		return false
+	}
+	return (r.TaskID == "ext_guidex-runtime-v4" || extra.Adapter == "guidex-runtime-v4") &&
+		extra.Reason == "session_ended"
 }
 
 func aggregateByTask(results []*model.ProbeResult, points int) []*model.ProbeResult {
@@ -62,9 +86,10 @@ func aggregateByTask(results []*model.ProbeResult, points int) []*model.ProbeRes
 	for _, tid := range order {
 		pts := aggregateResults(byTask[tid], per)
 		for _, p := range pts {
-			p.Extra = nil // All Tasks chart only plots per-task latency; drop extra to shrink payload
+			copy := *p
+			copy.Extra = nil // Keep raw rows intact for detail/export consumers.
+			out = append(out, &copy)
 		}
-		out = append(out, pts...)
 	}
 	return out
 }

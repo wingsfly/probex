@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>GuideX Timeline Test</title></head>
+  <body style="margin: 0; padding: 12px; background: #f8fafc">
+    <div id="root" style="max-width: 900px; margin: auto"></div>
+    <script type="module">
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import GuideXTimeline from '/src/components/GuideXTimeline.tsx';
+      const shared = { task_id: 'ext_guidex-runtime-v4', agent_id: 'test-browser', node_id: 'test-page' };
+      const rows = [
+        { ...shared, id: 'synthetic-microphone', timestamp: '2026-09-10T02:00:05Z', success: true,
+          extra: { cid: 'test-microphone', input_source: 'browser_mic', start_by: 'press', press_kind: 'pointer',
+            start_at: '2026-09-10T02:00:00Z', completion_reason: 'completed',
+            mic_ready: 650, upload: 640, speech: null,
+            asr: 1200, upload_end: 2200, input_end: 2230, asr_end: 2250,
+            reply: 2800, reply_end: 3000, speak: 3500, speak_end: 5000, end: 5000 } },
+        { ...shared, id: 'synthetic-interrupted', timestamp: '2026-09-10T02:00:24Z', success: true,
+          extra: { cid: 'test-old-round', input_source: 'browser_mic', start_by: 'press', press_kind: 'pointer',
+            start_at: '2026-09-10T02:00:10Z', completion_reason: 'interrupted',
+            mic_ready: 350, upload: 350,
+            asr: 1000, upload_end: 2200, input_end: 2250, asr_end: 2300,
+            reply: 3000, reply_end: 4500, speak: 4000, speak_end: null,
+            interrupt: 13000, interrupted: 13200, interrupt_ack: 200, end: 13200,
+            interrupt_at: '2026-09-10T02:00:23Z', interrupted_at: '2026-09-10T02:00:23.200Z' } },
+        { ...shared, id: 'synthetic-box', timestamp: '2026-09-10T02:01:01Z', success: false,
+          extra: { cid: 'test-box', input_source: 'multimodal_box', start_by: 'first_input',
+            start_at: '2026-09-10T02:01:00Z', completion_reason: 'disconnected', upload: 0, upload_end: 800, end: 1000 } },
+      ];
+      createRoot(document.getElementById('root')).render(React.createElement(GuideXTimeline, { results: rows }));
+    </script>
+  </body>
+</html>

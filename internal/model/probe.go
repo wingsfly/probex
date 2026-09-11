@@ -30,6 +30,7 @@ type ProbePushRequest struct {
 	AgentID string `json:"agent_id,omitempty"`
 	NodeID  string `json:"node_id,omitempty"`
 	Results []struct {
+		ResultID       string          `json:"result_id,omitempty"`
 		Timestamp      *string         `json:"timestamp,omitempty"`
 		Success        bool            `json:"success"`
 		LatencyMs      *float64        `json:"latency_ms,omitempty"`
