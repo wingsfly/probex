@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { GUIDEX_CHART_FIELDS, GUIDEX_LABELS, GUIDEX_STAGES, guidexTimeline, guidexChartTimeline, guidexChartFields, guidexSource, guidexStartBy,
+import { GUIDEX_CHART_FIELDS, GUIDEX_DURATION_KEYS, GUIDEX_LABELS, GUIDEX_STAGES, guidexChartAxis, guidexTimeline, guidexChartTimeline, guidexChartFields, guidexSource, guidexStartBy,
   guidexStatus, guidexSortFields, guidexFieldOrder, guidexTimingEligible } from '../src/lib/guidex-timeline.ts';
 
 const names = ['Mic_Ready', '1st_Audio', 'Speech_Started', '1st_STT', 'Last_Audio', 'Speech_Stopped',
@@ -75,6 +75,18 @@ test('chart keeps early milestones and replaces late cumulative nodes with inter
     'speak', 'speak_end', 'interrupt', 'interrupted', 'end'].includes(item.key)), false);
   assert.equal(chart.some(item => item.key === 'audio_start_to_speech_started'), false);
   assert.equal(chart.find(item => item.key === 'last_audio_to_final_asr').ms, 20);
+});
+
+test('duration and response metrics share a chart without sharing a numeric axis', () => {
+  assert.deepEqual([...GUIDEX_DURATION_KEYS], ['answer_stream', 'avatar_speak_duration']);
+  for (const key of ['answer_stream', 'avatar_speak_duration']) {
+    assert.equal(guidexChartAxis(key), 'duration');
+  }
+  for (const key of ['upload', 'asr', 'last_audio_to_final_asr',
+    'last_audio_to_first_answer', 'final_asr_to_first_answer',
+    'last_audio_to_avatar_start', 'interrupt_ack']) {
+    assert.equal(guidexChartAxis(key), 'response');
+  }
 });
 
 test('retired audio-to-speech stays hidden while speech and renamed durations keep their values', () => {

@@ -245,14 +245,22 @@ func (s *SQLiteStore) QueryResults(ctx context.Context, f model.ResultFilter) ([
 	return results, total, rows.Err()
 }
 
-// ResultDimensions lists distinct agent_ids (and, if agentID given, node_ids)
-// seen for a task within the last 24h — for populating the Results filters.
-// Bounded to a recent window so it stays cheap and reflects who is pushing now.
-func (s *SQLiteStore) ResultDimensions(ctx context.Context, taskID, agentID string) ([]string, []string, error) {
-	since := time.Now().Add(-24 * time.Hour).UnixMilli()
-	distinct := func(col, extraCond string, extraArgs ...any) ([]string, error) {
-		q := "SELECT DISTINCT " + col + " FROM probe_results WHERE task_id = ? AND timestamp >= ? AND " + col + " != ''" + extraCond + " ORDER BY " + col
-		args := append([]any{taskID, since}, extraArgs...)
+// ResultDimensions lists clients and pages in the same range as the Results
+// chart. Callers without an explicit range retain the bounded 24-hour default.
+func (s *SQLiteStore) ResultDimensions(ctx context.Context, filter model.ResultFilter) ([]string, []string, error) {
+	if filter.From.IsZero() {
+		filter.From = time.Now().Add(-24 * time.Hour)
+	}
+	distinct := func(col string, f model.ResultFilter) ([]string, error) {
+		f.NodeID = ""
+		f.Limit = 0
+		f.Offset = 0
+		where, args := buildResultWhere(f)
+		separator := " WHERE "
+		if where != "" {
+			separator = " AND "
+		}
+		q := "SELECT DISTINCT " + col + " FROM probe_results" + where + separator + col + " != '' ORDER BY " + col
 		rows, err := s.db.QueryContext(ctx, q, args...)
 		if err != nil {
 			return nil, err
@@ -268,13 +276,15 @@ func (s *SQLiteStore) ResultDimensions(ctx context.Context, taskID, agentID stri
 		}
 		return out, rows.Err()
 	}
-	agents, err := distinct("agent_id", "")
+	agentFilter := filter
+	agentFilter.AgentID = ""
+	agents, err := distinct("agent_id", agentFilter)
 	if err != nil {
 		return nil, nil, err
 	}
 	var nodes []string
-	if agentID != "" {
-		nodes, err = distinct("node_id", " AND agent_id = ?", agentID)
+	if filter.AgentID != "" {
+		nodes, err = distinct("node_id", filter)
 		if err != nil {
 			return nil, nil, err
 		}

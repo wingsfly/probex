@@ -5,7 +5,7 @@ import type { ProbeMetadata, ProbeResult, Task } from '../types/api';
 import GuideXTimeline from '../components/GuideXTimeline';
 import { clientOptions } from '../lib/client-options';
 import { loadResultExport, resultExportFields } from '../lib/results-export';
-import { GUIDEX_CHART_KEYS, GUIDEX_INTERVAL_FIELDS, GUIDEX_LABELS, GUIDEX_STAGES, guidexChartFields, guidexFieldOrder, guidexSortFields, guidexSource, guidexStartBy, guidexStatus, guidexTimingEligible } from '../lib/guidex-timeline';
+import { GUIDEX_CHART_KEYS, GUIDEX_INTERVAL_FIELDS, GUIDEX_LABELS, GUIDEX_STAGES, guidexChartAxis, guidexChartFields, guidexFieldOrder, guidexSortFields, guidexSource, guidexStartBy, guidexStatus, guidexTimingEligible } from '../lib/guidex-timeline';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
@@ -154,11 +154,12 @@ export default function Results() {
   });
 
   // Distinct clients (agent_id) for the selected task, and pages (node_id) for the
-  // selected client — to populate the Agent / Page filters. Bounded to last 24h.
+  // selected client, using the same active time range as the chart and table.
   const { data: dimData } = useQuery({
-    queryKey: ['dimensions', taskId, agentId],
+    queryKey: ['dimensions', taskId, agentId, timeRange, customFrom, customTo],
     queryFn: () => {
-      const p = new URLSearchParams();
+      const p = new URLSearchParams({ from: fromTime() });
+      const to = toTime(); if (to) p.set('to', to);
       if (taskId) p.set('task_id', taskId);
       if (agentId) p.set('agent_id', agentId);
       return api.getResultDimensions(p.toString());
@@ -406,7 +407,8 @@ export default function Results() {
     });
     numericExtraFields.forEach(k => {
       // available_outgoing_bitrate is bps-scale, everything else is small-scale
-      const yAxisId = k === 'available_outgoing_bitrate' ? 'bps' : 'default';
+      const yAxisId = k === 'available_outgoing_bitrate' ? 'bps'
+        : isGuideX && guidexChartAxis(k) === 'duration' ? 'duration' : 'default';
       lines.push({ key: `extra:${k}`, name: getShortName(k), color: EXTRA_COLORS[ci++ % EXTRA_COLORS.length], yAxisId });
     });
     return lines;
@@ -446,6 +448,7 @@ export default function Results() {
 
   // Determine which Y-axis groups have visible (non-hidden) lines
   const hasBpsAxis = chartLines.some(l => l.yAxisId === 'bps' && !hiddenLines.has(l.key));
+  const hasDurationAxis = chartLines.some(l => l.yAxisId === 'duration' && !hiddenLines.has(l.key));
   const hasDefaultAxis = chartLines.some(l => l.yAxisId === 'default' && !hiddenLines.has(l.key));
 
   // Detect default-axis unit from visible lines
@@ -672,6 +675,9 @@ export default function Results() {
                 <h2 style={{ fontSize: '1rem', fontWeight: 500, margin: 0 }}>
                   {isMultiTask ? 'Latency by Task' : isGuideX ? 'Turn Timing' : 'Metrics Over Time'}
                 </h2>
+                {isGuideX && <span style={{ marginLeft: '0.75rem', marginRight: 'auto', color: '#64748b', fontSize: '0.75rem' }}>
+                  Left: Response (ms) · Right: Duration (ms)
+                </span>}
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <button onClick={() => setHiddenLines(new Set())}
                     style={legendBtnStyle} title="Show all metrics">All</button>
@@ -714,7 +720,9 @@ export default function Results() {
                       ticks={generateTimeTicks(singleTaskChartData)}
                       tickFormatter={formatXTick} tick={{ fontSize: 10 }} angle={-25} textAnchor="end" height={50} />
                     <YAxis yAxisId="default" tick={{ fontSize: 11 }} unit={defaultAxisUnit}
-                      hide={!hasDefaultAxis} domain={['auto', 'auto']} />
+                      hide={!hasDefaultAxis} domain={isGuideX ? [0, 'auto'] : ['auto', 'auto']} />
+                    <YAxis yAxisId="duration" orientation="right" tick={{ fontSize: 11 }} unit="ms"
+                      hide={!hasDurationAxis} domain={[0, 'auto']} />
                     <YAxis yAxisId="bps" orientation="right" tick={{ fontSize: 11 }} unit="Mbps"
                       hide={!hasBpsAxis} domain={['auto', 'auto']} />
                     <Tooltip labelFormatter={(v) => typeof v === 'number' ? formatTooltipTime(v) : v}
@@ -728,8 +736,9 @@ export default function Results() {
                         }}>{value}</span>
                       )} />
                     {chartLines.map(line => (
-                      <Line key={line.key} type="monotone" dataKey={line.key} stroke={line.color}
-                        yAxisId={line.yAxisId} name={line.name} dot={isGuideX ? { r: 2 } : false} hide={hiddenLines.has(line.key)} connectNulls={!isGuideX} />
+                      <Line key={line.key} type={isGuideX ? 'linear' : 'monotone'} dataKey={line.key} stroke={line.color}
+                        yAxisId={line.yAxisId} name={line.name} dot={isGuideX ? { r: 2 } : false}
+                        hide={hiddenLines.has(line.key)} connectNulls={isGuideX} />
                     ))}
                   </LineChart>
                 )}

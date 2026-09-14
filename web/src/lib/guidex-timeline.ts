@@ -26,6 +26,14 @@ export const GUIDEX_CHART_FIELDS = [
 
 export const GUIDEX_CHART_KEYS = new Set<string>(GUIDEX_CHART_FIELDS.map(([key]) => key));
 
+export const GUIDEX_DURATION_KEYS = new Set<string>([
+  'answer_stream', 'avatar_speak_duration',
+]);
+
+export function guidexChartAxis(key: string): 'response' | 'duration' {
+  return GUIDEX_DURATION_KEYS.has(key) ? 'duration' : 'response';
+}
+
 export const GUIDEX_LABELS: Record<string, string> = {
   ...Object.fromEntries(GUIDEX_STAGES),
   ...Object.fromEntries(GUIDEX_INTERVAL_FIELDS),

@@ -83,11 +83,10 @@ func (h *ResultHandler) Latest(w http.ResponseWriter, r *http.Request) {
 	writeData(w, results)
 }
 
-// Dimensions returns the distinct agent_ids for a task (and node_ids for a
-// task+agent) so the Results page can offer per-client / per-page filters.
+// Dimensions returns clients and pages in the requested Results time range.
 func (h *ResultHandler) Dimensions(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	agents, nodes, err := h.store.ResultDimensions(r.Context(), q.Get("task_id"), q.Get("agent_id"))
+	filter := h.parseFilter(r)
+	agents, nodes, err := h.store.ResultDimensions(r.Context(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

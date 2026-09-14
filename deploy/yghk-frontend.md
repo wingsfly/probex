@@ -136,6 +136,55 @@ a deployment without a new field change does not trigger history cleanup.
 
 ## Release Record
 
+### Current: 20260914T072148Z
+
+- 2026-09-14 07:36:07 UTC（北京时间 15:36:07）完成后端/前端协调发布。
+  Runtime v4 的响应延迟与持续时间继续显示在同一张图中，但使用独立纵轴：
+  左轴为 response，右轴为 `Answer_Dur/Play_Dur`；稀疏序列仅连接实际观测点，
+  不补造缺失值。GuideX 使用线性连接和原始点，真实无交互时间段仍按时间轴保留。
+- `/results/dimensions` 支持与结果查询一致的 `from/to`，前端维度请求跟随
+  当前 1h/6h/24h/7d 或自定义范围。验收时所选 6 小时窗口有 14 个页面，
+  旧固定 24 小时口径为 50 个；`All pages` 不再混入范围外页面。
+- 本机 Go 全量 race/vet、Web 22 项测试和生产构建通过。主资源
+  `/assets/index-BRZKyhjW.js`，SHA-256
+  `ae48d819478819415a688701d1ce651de82ccbf838bb55e8ae9278baf884ddbb`；
+  后端二进制 SHA-256
+  `ebb275d811d1087673a84cf4a0a6cf6909df1a12368154333eacd5c204ddd7f2`。
+  Results 全文件仍有既有 any/表达式/Hook lint 债务，未在本次扩大修复。
+- 后端镜像 `probex-hk-backend:release-20260914T072148Z`，镜像 ID
+  `sha256:4e7ccb730d0b9d2d9baae515e0628ea00844387a5222a73d52cc179297fde31a`；
+  前端镜像 `probex-hk-frontend:release-20260914T072148Z`，镜像 ID
+  `sha256:faa225e5786455eb77ad0725c4a1339c2912ebe82c6100c811702f273cca1183`。
+  两者同时标记 latest。容器分别为 `95789a585610b9e635e928e4a4833fbeffc24e9e7808476d6f293a8c55392de7`
+  和 `595a7329aa9dd14b5e41991b59b969a47825ae2ea26a39fd4f3e60ba599c39f8`。
+- 第一次切换因 yghk 访问自身公网 HTTPS 回环失败触发自动回滚；后续确认
+  应用容器健康，而挂载证书已于 2025-10-12 过期，标准 TLS 校验失败。
+  第二次因 `guidex409.last_push_at` 在发布期间自然前进约 5 秒被严格注册
+  比较误报，再次自动回滚。两次均恢复上一版镜像、健康、配置和历史数据。
+  第三次将内部链路固定解析到回环地址，并排除 last_push/heartbeat 等动态
+  字段、继续严格比较注册结构和 Agent 能力集合，发布及验收通过。
+- 成功重试前有 336,094 条结果、2,676 条 v4，验收时总结果自然增长至
+  336,112，v4 数量不变。SQLite 在线备份 quick_check 正常，发布前历史
+  逐行核对保留；任务 7、探针 7、Agent 1，配置、端口、挂载、网络、其他
+  容器和规范化防火墙均未变化。没有修改、补算或清理历史指标数据。
+- 发布当时应用内部 HTTPS/Nginx/API、standalone、认证、线上/容器资源与二进制
+  哈希、时间范围维度及原始数据库查询一致性均通过，但公网证书有效期校验失败，
+  且电脑锁定，故该次发布未宣称完成浏览器视觉验收。下方 08:31 UTC 的独立
+  证书维护已解决该问题，并补做标准 TLS 和浏览器验收。
+- 受限远端目录 `releases/20260914T072148Z/` 保留在线数据库备份、旧二进制、
+  旧静态资源、两个回滚镜像标签、精确发布物、两次失败/回滚记录、各次
+  preflight 及最终 verification/postflight。远端重建源已更新，无数据库恢复。
+  回滚须按 backend 健康后 frontend 的顺序恢复两个
+  `rollback-20260914T072148Z` 标签，不能恢复整库。
+- 2026-09-14 08:31 UTC（北京时间 16:31）完成独立证书修复。根因是 1Panel
+  自有的旧 `cert-renew` 周任务仍硬编码复制 `cert1.pem`，在续签 hook 成功后
+  又把共享目录回退成 2025 年证书。已备份 1Panel 数据库、证书和 hooks，禁用
+  旧任务并归档脚本，重新同步 live 证书；维护备份位于
+  `/root/codex-deployments/certificate-maintenance/20260914T083103Z/`。
+  `443/8091/8443` 均提供同一张有效至 2026-12-08 的证书，标准 TLS、健康
+  检查及浏览器 Results 页面通过。仅 OpenResty、1Panel 和 ProbeX 前端重启，
+  ProbeX 后端及数据库未重启或改写。
+
 ### History Repair: 20260911T071419Z-history-repair
 
 - 2026-09-11 07:17:02 UTC（北京时间 15:17:02）按用户明确确认，修正 14 条

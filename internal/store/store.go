@@ -28,9 +28,8 @@ type Store interface {
 	// InsertResultsIfAbsent atomically inserts unseen IDs and returns only new rows.
 	InsertResultsIfAbsent(ctx context.Context, results []*model.ProbeResult) ([]*model.ProbeResult, error)
 	QueryResults(ctx context.Context, filter model.ResultFilter) ([]*model.ProbeResult, int, error)
-	// ResultDimensions returns the distinct agent_ids for a task (recent window)
-	// and, when agentID is given, the distinct node_ids for that task+agent.
-	ResultDimensions(ctx context.Context, taskID, agentID string) (agents []string, nodes []string, err error)
+	// ResultDimensions returns distinct clients and pages inside the selected range.
+	ResultDimensions(ctx context.Context, filter model.ResultFilter) (agents []string, nodes []string, err error)
 	GetResultSummary(ctx context.Context, filter model.ResultFilter) (*model.ResultSummary, error)
 	GetLatestResults(ctx context.Context) ([]*model.ProbeResult, error)
 	DeleteResultsBefore(ctx context.Context, taskID string, before int64) (int64, error)

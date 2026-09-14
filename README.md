@@ -55,6 +55,13 @@ no longer registered, reported, or displayed; the `Speech_Started` milestone rem
 Business ordering is independent of these display names;
 the table and export still retain the complete current observed fields. Results
 shows the trend chart, table/pagination, then the turn timing view.
+The Runtime v4 trend keeps response latency and duration metrics in the same
+chart but uses independent scales: response values use the left axis, while
+`Answer_Dur` and `Play_Dur` use the right axis. Sparse series connect only
+their actually reported samples; missing values are not synthesized. The
+client/page selector requests dimensions from the same active time range as
+the chart, so an `All pages` count no longer includes pages seen only outside
+the selected 1h/6h/24h/7d or custom interval.
 The `LastAudio_To_*` intervals use the last successful audio append in the same
 turn, not the server speech-stop notification. `LastAudio_To_STT` ends at final STT,
 `LastAudio_To_Answer` at the first nonempty answer, and `LastAudio_To_Play` at the
